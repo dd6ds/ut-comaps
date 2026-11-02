@@ -1,1 +1,54 @@
-²ø1šYì
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>ut-comaps</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2aa876"/>
+      <stop offset="1" stop-color="#16805a"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6b4a"/>
+      <stop offset="1" stop-color="#e2412a"/>
+    </linearGradient>
+    <clipPath id="map">
+      <path d="M40 72 L96 52 L160 72 L216 52 L216 196 L160 216 L96 196 L40 216 Z"/>
+    </clipPath>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <!-- background (full-bleed; Lomiri applies its own shape mask) -->
+  <rect width="256" height="256" fill="url(#bg)"/>
+
+  <!-- folded paper map -->
+  <g filter="url(#shadow)">
+    <g clip-path="url(#map)">
+      <!-- panels -->
+      <path d="M40 72 L96 52 L96 196 L40 216 Z" fill="#f4f1e8"/>
+      <path d="M96 52 L160 72 L160 216 L96 196 Z" fill="#e6e1d3"/>
+      <path d="M160 72 L216 52 L216 196 L160 216 Z" fill="#f4f1e8"/>
+      <!-- park / forest -->
+      <path d="M40 150 C70 140 88 158 96 176 L96 220 L40 220 Z" fill="#b9dca2"/>
+      <path d="M176 70 C196 78 206 96 216 100 L216 50 L170 50 Z" fill="#b9dca2"/>
+      <!-- river -->
+      <path d="M30 108 C70 98 92 128 128 124 C164 120 182 150 226 140"
+            fill="none" stroke="#7cc3ec" stroke-width="12" stroke-linecap="round"/>
+      <!-- roads -->
+      <path d="M58 230 C80 170 110 150 150 140 C182 132 200 104 210 40"
+            fill="none" stroke="#ffffff" stroke-width="13" stroke-linecap="round"/>
+      <path d="M58 230 C80 170 110 150 150 140 C182 132 200 104 210 40"
+            fill="none" stroke="#f6c343" stroke-width="7" stroke-linecap="round"/>
+      <path d="M30 186 L226 92" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
+      <!-- fold shading -->
+      <path d="M96 52 L104 55 L104 199 L96 196 Z" fill="#000" opacity="0.06"/>
+      <path d="M160 72 L152 69 L152 213 L160 216 Z" fill="#000" opacity="0.08"/>
+    </g>
+  </g>
+
+  <!-- location pin -->
+  <g filter="url(#shadow)">
+    <path d="M150 40 C129 40 112 57 112 78 C112 106 150 146 150 146 C150 146 188 106 188 78 C188 57 171 40 150 40 Z"
+          fill="url(#pin)" stroke="#ffffff" stroke-width="5" stroke-linejoin="round"/>
+    <circle cx="150" cy="78" r="14" fill="#ffffff"/>
+  </g>
+</svg>
