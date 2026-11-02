@@ -1,0 +1,105 @@
+diff --git a/qt/update_dialog.cpp b/qt/update_dialog.cpp
+index 5c9c3f5..2592356 100644
+--- a/qt/update_dialog.cpp
++++ b/qt/update_dialog.cpp
+@@ -22,6 +22,8 @@
+ #include <QtWidgets/QPushButton>
+ #include <QtWidgets/QTreeWidget>
+ #include <QtWidgets/QVBoxLayout>
++#include <QtGui/QGuiApplication>
++#include <QtGui/QScreen>
+ 
+ using namespace std;
+ using namespace storage;
+@@ -89,6 +91,8 @@ UpdateDialog::UpdateDialog(QWidget * parent, Framework & framework)
+   setWindowModality(Qt::WindowModal);
+ 
+   m_pCheckUpdatesLabel = new QLabel();
++  // Ubuntu Touch: status texts can be long; wrap them instead of widening the window.
++  m_pCheckUpdatesLabel->setWordWrap(true);
+   m_pCheckUpdatesButton = new QPushButton(QObject::tr("Check for updates"), this);
+   connect(m_pCheckUpdatesButton, &QAbstractButton::clicked, this, &UpdateDialog::OnCheckUpdatesClick);
+ 
+@@ -103,19 +107,28 @@ UpdateDialog::UpdateDialog(QWidget * parent, Framework & framework)
+   m_tree->setHeaderLabels(columnLabels);
+ 
+   m_tree->setColumnHidden(KColumnIndexPositionInRanking, true);
+-
+-  m_tree->header()->setSectionResizeMode(KColumnIndexCountry, QHeaderView::ResizeToContents);
++  // Ubuntu Touch: "Matched by" is a search debugging column; no room for it on a phone.
++  m_tree->setColumnHidden(KColumnIndexMatchedBy, true);
++
++  // Ubuntu Touch: the country column takes the remaining width and elides,
++  // status and size keep their natural width. Wider rows scroll sideways.
++  m_tree->header()->setStretchLastSection(false);
++  m_tree->header()->setMinimumSectionSize(40);
++  m_tree->header()->setSectionResizeMode(KColumnIndexCountry, QHeaderView::Stretch);
+   m_tree->header()->setSectionResizeMode(KColumnIndexStatus, QHeaderView::ResizeToContents);
++  m_tree->header()->setSectionResizeMode(KColumnIndexSize, QHeaderView::ResizeToContents);
+   m_tree->header()->setSectionResizeMode(KColumnIndexMatchedBy, QHeaderView::ResizeToContents);
+   m_tree->header()->setSectionResizeMode(KColumnIndexPositionInRanking, QHeaderView::ResizeToContents);
++  m_tree->setTextElideMode(Qt::ElideRight);
++  m_tree->setIndentation(12);
++  m_tree->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+ 
+   connect(m_tree, &QTreeWidget::itemClicked, this, &UpdateDialog::OnItemClick);
+ 
++  // Ubuntu Touch: status text on its own row, the two buttons below it.
+   QHBoxLayout * horizontalLayout = new QHBoxLayout();
+-  horizontalLayout->addStretch();
+-  horizontalLayout->addWidget(m_pCheckUpdatesLabel);
+-  horizontalLayout->addWidget(m_pCheckUpdatesButton);
+-  horizontalLayout->addWidget(closeButton);
++  horizontalLayout->addWidget(m_pCheckUpdatesButton, 1);
++  horizontalLayout->addWidget(closeButton, 1);
+ 
+   QLabel * localeLabel = new QLabel(tr("locale:"));
+   QLineEdit * localeEdit = new QLineEdit(this);
+@@ -124,6 +137,13 @@ UpdateDialog::UpdateDialog(QWidget * parent, Framework & framework)
+ 
+   QLabel * queryLabel = new QLabel(tr("search query:"));
+   QLineEdit * queryEdit = new QLineEdit(this);
++  // Ubuntu Touch: the locale override is a developer option; hide it and use
++  // a placeholder instead of a label so the search field gets the full width.
++  localeLabel->setVisible(false);
++  localeEdit->setVisible(false);
++  queryLabel->setVisible(false);
++  queryEdit->setPlaceholderText(tr("Search country or region"));
++  queryEdit->setClearButtonEnabled(true);
+   connect(queryEdit, &QLineEdit::textChanged, this, &UpdateDialog::OnQueryTextChanged);
+ 
+   QGridLayout * inputLayout = new QGridLayout();
+@@ -136,11 +156,16 @@ UpdateDialog::UpdateDialog(QWidget * parent, Framework & framework)
+   QVBoxLayout * verticalLayout = new QVBoxLayout();
+   verticalLayout->addLayout(inputLayout);
+   verticalLayout->addWidget(m_tree);
++  verticalLayout->addWidget(m_pCheckUpdatesLabel);
+   verticalLayout->addLayout(horizontalLayout);
+   setLayout(verticalLayout);
+ 
+   setWindowTitle(tr("Geographical Regions"));
+-  resize(900, 600);
++  // Ubuntu Touch: fill the phone screen instead of a fixed 900x600 desktop size.
++  if (QScreen const * screen = QGuiApplication::primaryScreen())
++    resize(screen->availableGeometry().size());
++  else
++    resize(900, 600);
+ 
+   // We want to receive all download progress and result events.
+   using namespace std::placeholders;
+@@ -518,13 +543,13 @@ void UpdateDialog::UpdateRowWithCountryInfo(QTreeWidgetItem * item, CountryId co
+ 
+     if (size.second > Mb)
+     {
+-      item->setText(KColumnIndexSize, QString("%1/%2 MB (click to cancel)")
++      item->setText(KColumnIndexSize, QString("%1/%2 MB")
+                                           .arg(uint((size.first + halfMb) / Mb))
+                                           .arg(uint((size.second + halfMb) / Mb)));
+     }
+     else
+     {
+-      item->setText(KColumnIndexSize, QString("%1/%2 kB (click to cancel)")
++      item->setText(KColumnIndexSize, QString("%1/%2 kB")
+                                           .arg(uint((size.first + 1023) / 1024))
+                                           .arg(uint((size.second + 1023) / 1024)));
+     }
