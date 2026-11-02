@@ -52,7 +52,9 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION="${BASE_VERSION}+git${GITHUB_SHA::7}"
+            # No "+" here: Lomiri rejects app IDs whose version contains it
+            # ("Invalid app ID"). The run number keeps versions increasing.
+            VERSION="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Click-Version: $VERSION"
