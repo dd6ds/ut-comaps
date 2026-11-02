@@ -1,0 +1,183 @@
+diff --git a/qt/draw_widget.cpp b/qt/draw_widget.cpp
+index 1b8fe47..1bb44ea 100644
+--- a/qt/draw_widget.cpp
++++ b/qt/draw_widget.cpp
+@@ -38,6 +38,7 @@
+ #include <QtGui/QGuiApplication>
+ #include <QtGui/QMouseEvent>
+ #include <QtWidgets/QApplication>
++#include <QtWidgets/QLabel>
+ #include <QtWidgets/QDialogButtonBox>
+ #include <QtWidgets/QMenu>
+ 
+@@ -106,8 +107,11 @@ DrawWidget::DrawWidget(Framework & framework, std::unique_ptr<ScreenshotParams>
+   auto & routingManager = m_framework.GetRoutingManager();
+ 
+   routingManager.SetRouteBuildingListener(
+-      [&routingManager, this](routing::RouterResultCode, storage::CountriesSet const &)
++      [&routingManager, this](routing::RouterResultCode code, storage::CountriesSet const &)
+   {
++    // Queued: the label is touched on the GUI thread after the route is set.
++    QMetaObject::invokeMethod(this, [this, code] { ShowRouteInfo(code); }, Qt::QueuedConnection);
++
+     auto & drapeApi = m_framework.GetDrapeApi();
+ 
+     m_turnsVisualizer.ClearTurns(drapeApi);
+@@ -627,6 +631,7 @@ void DrawWidget::ClearRoute()
+ 
+   bool const wasActive = routingManager.IsRoutingActive() && routingManager.IsRoutingFollowing();
+   routingManager.CloseRouting(true /* remove route points */);
++  HideRouteInfo();
+ 
+   if (wasActive)
+     m_framework.SwitchToUsingVehicleStyle(false);
+@@ -749,4 +754,120 @@ m2::PointD DrawWidget::GetCoordsFromSettingsIfExists(bool start, m2::PointD cons
+ 
+   return pointIsMercator ? pt : P2G(pt);
+ }
++// ---------------------------------------------------------------------------
++// Ubuntu Touch: route summary overlay. The desktop frontend only logged route
++// details; on a phone the user needs distance and travel time on screen.
++namespace
++{
++QString FormatDuration(int seconds)
++{
++  int const minutes = (std::max(seconds, 0) + 30) / 60;
++  if (minutes < 60)
++    return QString("%1 min").arg(std::max(minutes, 1));
++  int const days = minutes / (24 * 60);
++  int const hours = (minutes / 60) % 24;
++  int const mins = minutes % 60;
++  if (days > 0)
++    return QString("%1 d %2 h").arg(days).arg(hours);
++  return mins == 0 ? QString("%1 h").arg(hours) : QString("%1 h %2 min").arg(hours).arg(mins);
++}
++
++QString RouterName(routing::RouterType type)
++{
++  switch (type)
++  {
++  case routing::RouterType::Vehicle: return QObject::tr("Car");
++  case routing::RouterType::Pedestrian: return QObject::tr("Walk");
++  case routing::RouterType::Bicycle: return QObject::tr("Bike");
++  case routing::RouterType::Transit: return QObject::tr("Transit");
++  case routing::RouterType::Ruler: return QObject::tr("Ruler");
++  default: return {};
++  }
++}
++}  // namespace
++
++void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
++{
++  if (!m_routeInfo)
++  {
++    m_routeInfo = new QLabel(this);
++    m_routeInfo->setObjectName("utRouteInfo");
++    m_routeInfo->setAlignment(Qt::AlignCenter);
++    m_routeInfo->setWordWrap(true);
++    m_routeInfo->setAttribute(Qt::WA_TransparentForMouseEvents);
++    m_routeInfo->setStyleSheet(
++        "QLabel#utRouteInfo { background: rgba(32,32,32,220); color: white; border-radius: 10px;"
++        " padding: 8px 14px; font-weight: bold; }");
++  }
++
++  auto & routingManager = m_framework.GetRoutingManager();
++  QString text;
++  if (code != routing::RouterResultCode::NoError)
++  {
++    if (code == routing::RouterResultCode::Cancelled)
++      return;
++    text = tr("No route: %1").arg(QString::fromStdString(routing::DebugPrint(code)));
++  }
++  else
++  {
++    if (!routingManager.IsRouteBuilt())
++    {
++      HideRouteInfo();
++      return;
++    }
++    routing::FollowingInfo info;
++    routingManager.GetRouteFollowingInfo(info);
++    if (!info.IsValid())
++    {
++      HideRouteInfo();
++      return;
++    }
++    auto const routerType = routing::GetLastUsedRouter();
++    text = RouterName(routerType);
++    if (!text.isEmpty())
++      text += QStringLiteral("  ·  ");
++    text += QString::fromStdString(info.m_distToTarget.ToString()) + QStringLiteral("  ·  ") +
++            FormatDuration(info.m_time);
++
++    if (routerType == routing::RouterType::Pedestrian || routerType == routing::RouterType::Bicycle)
++    {
++      RoutingManager::DistanceAltitude da;
++      if (routingManager.GetRouteAltitudesAndDistancesM(da))
++      {
++        da.Simplify();
++        uint32_t ascent = 0, descent = 0;
++        da.CalculateAscentDescent(ascent, descent);
++        text += QString("\n\u2191 %1 m   \u2193 %2 m").arg(ascent).arg(descent);
++      }
++    }
++  }
++
++  m_routeInfo->setText(text);
++  PlaceRouteInfo();
++  m_routeInfo->show();
++  m_routeInfo->raise();
++}
++
++void DrawWidget::HideRouteInfo()
++{
++  if (m_routeInfo)
++    m_routeInfo->hide();
++}
++
++void DrawWidget::PlaceRouteInfo()
++{
++  if (!m_routeInfo)
++    return;
++  int const margin = 8;
++  int const maxWidth = std::max(width() - 2 * margin, 100);
++  m_routeInfo->setMaximumWidth(maxWidth);
++  m_routeInfo->adjustSize();
++  m_routeInfo->move((width() - m_routeInfo->width()) / 2, margin);
++}
++
++void DrawWidget::resizeEvent(QResizeEvent * e)
++{
++  TBase::resizeEvent(e);
++  PlaceRouteInfo();
++}
+ }  // namespace qt
+diff --git a/qt/draw_widget.hpp b/qt/draw_widget.hpp
+index 2a37ed8..1d4c24a 100644
+--- a/qt/draw_widget.hpp
++++ b/qt/draw_widget.hpp
+@@ -13,6 +13,8 @@
+ 
+ #include <QtWidgets/QRubberBand>
+ 
++class QLabel;
++
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -85,8 +87,15 @@ protected:
+ 
+   void keyPressEvent(QKeyEvent * e) override;
+   void keyReleaseEvent(QKeyEvent * e) override;
++  void resizeEvent(QResizeEvent * e) override;
+ 
+ private:
++  // Ubuntu Touch: route summary (distance, time, ascent) shown over the map.
++  void ShowRouteInfo(routing::RouterResultCode code);
++  void HideRouteInfo();
++  void PlaceRouteInfo();
++  QLabel * m_routeInfo = nullptr;
++
+   void SubmitFakeLocationPoint(m2::PointD const & pt);
+   void SubmitRulerPoint(m2::PointD const & pt);
+   void SubmitRoutingPoint(m2::PointD const & pt, bool pointIsMercator);
