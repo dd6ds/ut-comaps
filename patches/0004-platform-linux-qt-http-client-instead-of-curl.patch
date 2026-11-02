@@ -1,0 +1,225 @@
+diff --git a/libs/platform/CMakeLists.txt b/libs/platform/CMakeLists.txt
+index 8417a76..61c0539 100644
+--- a/libs/platform/CMakeLists.txt
++++ b/libs/platform/CMakeLists.txt
+@@ -153,7 +153,7 @@ else() # neither iPhone nor Android
+   elseif(${PLATFORM_LINUX})
+     append(SRC
+       gui_thread_qt.cpp
+-      http_client_curl.cpp
++      http_client_qt.cpp
+       http_thread_qt.cpp
+       http_thread_qt.hpp
+       http_uploader_dummy.cpp
+diff --git a/libs/platform/http_client_qt.cpp b/libs/platform/http_client_qt.cpp
+new file mode 100644
+index 0000000..a3e2e3d
+--- /dev/null
++++ b/libs/platform/http_client_qt.cpp
+@@ -0,0 +1,206 @@
++// Ubuntu Touch: HttpClient on top of Qt Network instead of `popen("curl ...")`.
++//
++// The upstream Linux implementation (http_client_curl.cpp) shells out to curl
++// and uses temp files. A confined click app may neither exec /bin/sh or curl
++// nor write to /tmp, so popen() returns NULL and the unchecked fread() crashed
++// the app on start (metaserver request). This implementation keeps the same
++// semantics (manual redirects unless SetFollowRedirects(true), headers,
++// cookies, body data/file, received file, timeout) without any subprocess.
++#include "platform/http_client.hpp"
++
++#include "coding/zlib.hpp"
++
++#include "base/logging.hpp"
++#include "base/string_utils.hpp"
++
++#include <QtCore/QByteArray>
++#include <QtCore/QCoreApplication>
++#include <QtCore/QEventLoop>
++#include <QtCore/QFile>
++#include <QtCore/QTimer>
++#include <QtCore/QUrl>
++#include <QtNetwork/QNetworkAccessManager>
++#include <QtNetwork/QNetworkReply>
++#include <QtNetwork/QNetworkRequest>
++
++#include <fstream>
++#include <iterator>
++#include <string>
++
++namespace
++{
++std::string ReadFileAsString(std::string const & filePath)
++{
++  std::ifstream ifs(filePath, std::ifstream::in | std::ifstream::binary);
++  if (!ifs.is_open())
++    return {};
++  return {std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>()};
++}
++
++std::string Inflate(std::string const & compressed)
++{
++  std::string decompressed;
++  coding::ZLib::Inflate inflate(coding::ZLib::Inflate::Format::ZLib);
++  UNUSED_VALUE(inflate(compressed, std::back_inserter(decompressed)));
++  return decompressed;
++}
++}  // namespace
++
++namespace platform
++{
++bool HttpClient::RunHttpRequest()
++{
++  if (!QCoreApplication::instance())
++  {
++    LOG(LERROR, ("HttpClient needs a QCoreApplication"));
++    return false;
++  }
++
++  // Each call runs on its own thread with its own manager and event loop
++  // (synchronous API, called from worker threads).
++  QNetworkAccessManager manager;
++  QNetworkRequest request(QUrl(QString::fromStdString(m_urlRequested)));
++  // Redirects are handled below exactly like the curl implementation did.
++  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
++  request.setTransferTimeout(static_cast<int>(m_timeoutSec * 1000));
++
++  bool userSetAcceptEncoding = false;
++  for (auto const & header : m_headers)
++  {
++    if (strings::EqualNoCase(header.first, "Accept-Encoding"))
++      userSetAcceptEncoding = true;
++    request.setRawHeader(QByteArray::fromStdString(header.first), QByteArray::fromStdString(header.second));
++  }
++  if (!m_cookies.empty())
++    request.setRawHeader("Cookie", QByteArray::fromStdString(m_cookies));
++
++  QByteArray body;
++  if (!m_bodyData.empty())
++    body = QByteArray::fromStdString(m_bodyData);
++  else if (!m_inputFile.empty())
++  {
++    QFile in(QString::fromStdString(m_inputFile));
++    if (!in.open(QIODevice::ReadOnly))
++    {
++      LOG(LERROR, ("Can't read body file", m_inputFile));
++      return false;
++    }
++    body = in.readAll();
++  }
++
++  QByteArray const method = QByteArray::fromStdString(m_httpMethod);
++  QNetworkReply * reply = nullptr;
++  if (method == "GET")
++    reply = manager.get(request);
++  else if (method == "HEAD")
++    reply = manager.head(request);
++  else if (method == "POST")
++    reply = manager.post(request, body);
++  else if (method == "PUT")
++    reply = manager.put(request, body);
++  else
++    reply = manager.sendCustomRequest(request, method, body);
++
++  QEventLoop loop;
++  QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
++  // Safety net in case transferTimeout does not fire (e.g. stuck connect).
++  QTimer::singleShot(static_cast<int>(m_timeoutSec * 1000) + 5000, &loop, &QEventLoop::quit);
++  loop.exec();
++
++  if (!reply->isFinished())
++  {
++    reply->abort();
++    reply->deleteLater();
++    LOG(LWARNING, ("HTTP timeout", m_urlRequested));
++    m_errorCode = kNoError;
++    return false;
++  }
++
++  QVariant const status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
++  if (!status.isValid())
++  {
++    // No HTTP response at all (DNS, TLS, connection refused, ...).
++    LOG(LWARNING, ("HTTP request failed", m_urlRequested, reply->errorString().toStdString()));
++    m_errorCode = kNoError;
++    reply->deleteLater();
++    return false;
++  }
++  m_errorCode = status.toInt();
++
++  QByteArray const data = reply->readAll();
++  m_headers.clear();
++  m_urlReceived.clear();
++  std::string serverCookies;
++  std::string contentEncoding;
++  for (auto const & pair : reply->rawHeaderPairs())
++  {
++    std::string key = pair.first.toStdString();
++    std::string const value = pair.second.toStdString();
++    if (strings::EqualNoCase(key, "Set-Cookie"))
++    {
++      // Qt joins multiple Set-Cookie headers with '\n'.
++      std::string v = value;
++      for (auto & c : v)
++        if (c == '\n')
++          c = ',';
++      serverCookies += v + ", ";
++      continue;
++    }
++    if (strings::EqualNoCase(key, "Location"))
++      m_urlReceived = reply->url().resolved(QUrl(QString::fromStdString(value))).toString().toStdString();
++    if (strings::EqualNoCase(key, "Content-Encoding"))
++      contentEncoding = value;
++    if (m_loadHeaders)
++    {
++      strings::AsciiToLower(key);
++      m_headers.emplace(key, value);
++    }
++  }
++  m_headers.emplace("Set-Cookie", NormalizeServerCookies(std::move(serverCookies)));
++  reply->deleteLater();
++
++  if (m_urlReceived.empty())
++  {
++    m_urlReceived = m_urlRequested;
++    std::string payload = data.toStdString();
++    // Qt decodes gzip/deflate itself unless the caller set Accept-Encoding.
++    if (userSetAcceptEncoding && strings::EqualNoCase(contentEncoding, "deflate"))
++      payload = Inflate(payload);
++
++    if (!m_outputFile.empty())
++    {
++      std::ofstream out(m_outputFile, std::ofstream::binary | std::ofstream::trunc);
++      if (!out.is_open())
++      {
++        LOG(LERROR, ("Can't write received file", m_outputFile));
++        return false;
++      }
++      out.write(payload.data(), static_cast<std::streamsize>(payload.size()));
++    }
++    else
++    {
++      m_serverResponse = std::move(payload);
++    }
++  }
++  else if (m_followRedirects)
++  {
++    LOG(LDEBUG, ("HTTP redirect", m_errorCode, "to", m_urlReceived));
++    HttpClient redirect(m_urlReceived);
++    redirect.SetCookies(CombinedCookies());
++    redirect.SetTimeout(m_timeoutSec);
++    redirect.LoadHeaders(m_loadHeaders);
++    if (!m_outputFile.empty())
++      redirect.SetReceivedFile(m_outputFile);
++    if (!redirect.RunHttpRequest())
++    {
++      m_errorCode = kNoError;
++      return false;
++    }
++    m_errorCode = redirect.ErrorCode();
++    m_urlReceived = redirect.UrlReceived();
++    m_headers = redirect.GetHeaders();
++    m_serverResponse = redirect.ServerResponse();
++  }
++  return true;
++}
++}  // namespace platform
