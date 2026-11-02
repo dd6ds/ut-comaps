@@ -1,0 +1,9 @@
+{
+    "policy_version": 20.04,
+    "policy_groups": [
+        "networking",
+        "location",
+        "audio",
+        "keep-display-on"
+    ]
+}

@@ -1,0 +1,15 @@
+{
+    "clickable_minimum_required": "8.0.0",
+    "builder": "custom",
+    "restrict_arch": "arm64",
+    "framework": "ubuntu-touch-24.04-1.x",
+    "docker_image": "ut-comaps:noble-arm64",
+    "build": "scripts/build-comaps.sh ${INSTALL_DIR}",
+    "kill": "comaps.bin",
+    "scripts": {
+        "source": "scripts/fetch-source.sh",
+        "shell": "bash",
+        "clean": "rm -rf build source"
+    },
+    "default": "build"
+}

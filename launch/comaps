@@ -1,0 +1,28 @@
+#!/bin/bash
+# CoMaps launcher for Ubuntu Touch.
+# Sets up the bundled Qt6 libraries, the Wayland platform plugin, the UI scale
+# and the read-only/writable data paths, then execs the real binary.
+set -e
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export QT_PLUGIN_PATH="$HERE/lib/plugins"
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland}"
+# Lomiri draws the window frame; Qt must not add its own decorations.
+export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+
+# Lomiri exports GRID_UNIT_PX (8 on a desktop, ~18-27 on a phone). Qt Widgets
+# know nothing of it, so scale the whole UI to the same size as native apps.
+if [ -z "${QT_SCALE_FACTOR:-}" ] && [ -n "${GRID_UNIT_PX:-}" ]; then
+    export QT_SCALE_FACTOR="$(awk -v g="$GRID_UNIT_PX" 'BEGIN { printf "%.2f", g / 8 }')"
+fi
+
+# Confined apps may only write below ~/.local/share/<click name> (and .cache,
+# .config). The click itself is read-only: it holds the resources.
+PKG="ut-comaps"
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}/$PKG"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+mkdir -p "$DATA" "$XDG_CACHE_HOME/$PKG"
+
+exec "$HERE/comaps.bin" -resources_path "$HERE/data/" -data_path "$DATA/" "$@"

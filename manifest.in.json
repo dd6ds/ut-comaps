@@ -1,0 +1,17 @@
+{
+    "name": "ut-comaps",
+    "version": "@CLICK_VERSION@",
+    "architecture": "@CLICK_ARCH@",
+    "framework": "@CLICK_FRAMEWORK@",
+    "title": "CoMaps",
+    "description": "Offline-Karten und Navigation basierend auf OpenStreetMap. Community-Fork von Organic Maps.",
+    "maintainer": "Dennis <dd6ds@eclipso.de>",
+    "type": "app",
+    "icon": "ut-comaps.svg",
+    "hooks": {
+        "ut-comaps": {
+            "apparmor": "ut-comaps.apparmor",
+            "desktop": "ut-comaps.desktop"
+        }
+    }
+}

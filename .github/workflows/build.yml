@@ -1,0 +1,132 @@
+name: Build click
+
+on:
+  # Manuell starten: GitHub -> Actions -> "Build click" -> "Run workflow"
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Ergebnis als GitHub-Release veröffentlichen"
+        type: boolean
+        default: false
+  # Tag pushen (git tag v0.1.0 && git push --tags) -> Build + Release
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write          # nötig zum Anlegen von Releases
+
+concurrency:
+  group: build-click-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Version für Builds ohne Tag (mit Tag v1.2.3 wird es 1.2.3).
+  BASE_VERSION: "0.1.0"
+  IMAGE: ut-comaps:noble-arm64
+  # GitHub-Spiegel von Codeberg, aus den Runnern meist schneller erreichbar.
+  COMAPS_GIT_URL: https://github.com/comaps/comaps.git
+
+jobs:
+  build:
+    # Nativer arm64-Runner: kein qemu, der CoMaps-Build dauert so ~1-2 h statt
+    # vieler Stunden (und passt in das 6-h-Limit von GitHub Actions).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 340
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Quellen + Build brauchen ~20 GB; der Runner hat ab Werk deutlich weniger frei.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune -af >/dev/null || true
+          df -h /
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${BASE_VERSION}+git${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Click-Version: $VERSION"
+
+      # Dasselbe Image wie lokal für clickable (Dockerfile.noble-arm64), hier nativ gebaut.
+      - name: Build Docker image
+        run: docker build -t "$IMAGE" -f Dockerfile.noble-arm64 .
+
+      # Compiler-Cache zwischen den Läufen: ein zweiter Build ist deutlich schneller.
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-noble-arm64-${{ hashFiles('scripts/fetch-source.sh', 'patches/*.patch') }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-noble-arm64-${{ hashFiles('scripts/fetch-source.sh', 'patches/*.patch') }}-
+            ccache-noble-arm64-
+
+      # Wie lokal: fetch-source.sh holt CoMaps am gepinnten Commit, build-comaps.sh
+      # wendet patches/ an, baut das Desktop-Frontend und packt nach build/*.click.
+      - name: Fetch sources and build click (arm64)
+        run: |
+          docker run --rm \
+            -v "$PWD":/project -w /project \
+            -e COMAPS_GIT_URL -e COMAPS_VERSION="${{ steps.version.outputs.version }}" \
+            -e CCACHE_DIR=/project/.ccache -e CCACHE_MAXSIZE=3G \
+            "$IMAGE" bash -euo pipefail -c '
+              git config --global --add safe.directory "*"
+              scripts/fetch-source.sh
+              scripts/build-comaps.sh
+              ccache -s || true
+            '
+          sudo chown -R "$(id -u):$(id -g)" .
+
+      - name: Collect click
+        id: click
+        run: |
+          mkdir -p dist
+          cp build/*.click dist/
+          (cd dist && sha256sum *.click > SHA256SUMS)
+          ls -lh dist
+          echo "file=$(cd dist && ls *.click)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ut-comaps-${{ steps.version.outputs.version }}-arm64
+          path: dist/
+          retention-days: 30
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="build-$(date -u +%Y%m%d-%H%M)"
+          fi
+          CLICK="${{ steps.click.outputs.file }}"
+          cat > notes.md <<NOTES
+          CoMaps ${{ steps.version.outputs.version }} für Ubuntu Touch **24.04 (Noble), arm64**, gebaut von Commit ${GITHUB_SHA::7}.
+          Läuft nicht auf 20.04/Focal (CoMaps braucht Qt6 und C++23).
+
+          **Installieren** (Telefon per USB, Entwicklermodus an):
+          \`\`\`bash
+          adb push ${CLICK} /home/phablet/Downloads/
+          adb shell pkcon install-local --allow-untrusted /home/phablet/Downloads/${CLICK}
+          \`\`\`
+          Oder die .click-Datei auf dem Telefon mit dem OpenStore öffnen.
+
+          Kartendaten © OpenStreetMap-Mitwirkende (ODbL). CoMaps steht unter Apache-2.0.
+          NOTES
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "ut-comaps $TAG" \
+            --notes-file notes.md

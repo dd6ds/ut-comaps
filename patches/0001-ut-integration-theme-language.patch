@@ -1,0 +1,494 @@
+diff --git a/qt/CMakeLists.txt b/qt/CMakeLists.txt
+index e6dddaa..0f60435 100644
+--- a/qt/CMakeLists.txt
++++ b/qt/CMakeLists.txt
+@@ -63,6 +63,8 @@ set(SRC
+   star_rating_widget.hpp
+   update_dialog.cpp
+   update_dialog.hpp
++  ut_integration.cpp
++  ut_integration.hpp
+ )
+ 
+ omim_add_executable(${PROJECT_NAME} MACOSX_BUNDLE ${RES_SOURCES} ${SRC})
+diff --git a/qt/main.cpp b/qt/main.cpp
+index cc1e694..0248426 100644
+--- a/qt/main.cpp
++++ b/qt/main.cpp
+@@ -2,6 +2,7 @@
+ #include "qt/info_dialog.hpp"
+ #include "qt/mainwindow.hpp"
+ #include "qt/screenshoter.hpp"
++#include "qt/ut_integration.hpp"
+ 
+ #include "qt/qt_common/helpers.hpp"
+ 
+@@ -127,6 +128,9 @@ int main(int argc, char * argv[])
+   if (!FLAGS_data_path.empty())
+     platform.SetWritableDirForTests(FLAGS_data_path);
+ 
++  // ut-comaps: the chosen user interface language, before anything reads it.
++  ut::ApplyStoredLanguage();
++
+   if (auto const logLevel = base::FromString(FLAGS_log_abort_level); logLevel)
+     base::g_LogAbortLevel = *logLevel;
+   else
+@@ -138,7 +142,13 @@ int main(int argc, char * argv[])
+   UNUSED_VALUE(mainGuard);
+ 
+   QApplication app(argc, argv);
+-  app.setDesktopFileName("app.comaps.comaps");
++  // ut-comaps: Lomiri matches the Wayland app id against the click's APP_ID.
++  if (qEnvironmentVariableIsSet("APP_ID"))
++    app.setDesktopFileName(qEnvironmentVariable("APP_ID"));
++  else
++    app.setDesktopFileName("app.comaps.comaps");
++  // ut-comaps: light/dark widgets, following the phone or the user's choice.
++  ut::Theme::Instance().ApplyToApplication();
+   platform.SetupMeasurementSystem();
+ 
+ #ifdef BUILD_DESIGNER
+@@ -239,6 +249,8 @@ int main(int argc, char * argv[])
+ #endif  // BUILD_DESIGNER
+ 
+     Framework framework(frameworkParams);
++    // ut-comaps: the map follows the light/dark appearance.
++    ut::Theme::Instance().AttachFramework(framework);
+     qt::MainWindow w(framework, std::move(screenshotParams), QApplication::primaryScreen()->geometry()
+ #ifdef BUILD_DESIGNER
+                                                                  ,
+@@ -247,6 +259,7 @@ int main(int argc, char * argv[])
+     );
+     w.show();
+     returnCode = QApplication::exec();
++    ut::Theme::Instance().DetachFramework();
+ 
+ #ifdef BUILD_DESIGNER
+     if (build_style::NeedRecalculate && !mapcssFilePath.isEmpty())
+diff --git a/qt/mainwindow.cpp b/qt/mainwindow.cpp
+index 4173f22..9aaf07c 100644
+--- a/qt/mainwindow.cpp
++++ b/qt/mainwindow.cpp
+@@ -84,9 +84,8 @@ void FormatMapSize(uint64_t sizeInBytes, std::string & units, size_t & sizeToDow
+ template <class T>
+ T * CreateBlackControl(QString const & name)
+ {
+-  T * p = new T(name);
+-  p->setStyleSheet("color: black;");
+-  return p;
++  // ut-comaps: no fixed black text, the palette decides (light and dark).
++  return new T(name);
+ }
+ 
+ }  // namespace
+diff --git a/qt/preferences_dialog.cpp b/qt/preferences_dialog.cpp
+index eb06477..5d862db 100644
+--- a/qt/preferences_dialog.cpp
++++ b/qt/preferences_dialog.cpp
+@@ -1,4 +1,5 @@
+ #include "qt/preferences_dialog.hpp"
++#include "qt/ut_integration.hpp"
+ 
+ #include "indexer/map_style.hpp"
+ #include "map/framework.hpp"
+@@ -18,6 +19,7 @@
+ #include <QtWidgets/QGroupBox>
+ #include <QtWidgets/QHBoxLayout>
+ #include <QtWidgets/QLabel>
++#include <QtWidgets/QMessageBox>
+ #include <QtWidgets/QPushButton>
+ #include <QtWidgets/QRadioButton>
+ #include <QtWidgets/QVBoxLayout>
+@@ -201,28 +203,52 @@ PreferencesDialog::PreferencesDialog(QWidget * parent, Framework & framework)
+             [&framework](int state) { framework.SetShowBookmarkLabels(state != 0); });
+   }
+ 
++  // ut-comaps: one appearance for the widgets and the map, like the phone or fixed.
+   QButtonGroup * mapAppearanceGroup = new QButtonGroup(this);
+-  QGroupBox * mapAppearanceRadioBox = new QGroupBox("Map Appearance");
++  QGroupBox * mapAppearanceRadioBox = new QGroupBox("Appearance");
+   {
+-    using namespace style_utils;
+     QHBoxLayout * layout = new QHBoxLayout();
+ 
+-    QRadioButton * radioButton = new QRadioButton("Light");
++    QRadioButton * radioButton = new QRadioButton("Like the phone");
+     layout->addWidget(radioButton);
+-    mapAppearanceGroup->addButton(radioButton, static_cast<int>(MapAppearance::Light));
++    mapAppearanceGroup->addButton(radioButton, static_cast<int>(ut::ThemeMode::System));
++
++    radioButton = new QRadioButton("Light");
++    layout->addWidget(radioButton);
++    mapAppearanceGroup->addButton(radioButton, static_cast<int>(ut::ThemeMode::Light));
+ 
+     radioButton = new QRadioButton("Dark");
+     layout->addWidget(radioButton);
+-    mapAppearanceGroup->addButton(radioButton, static_cast<int>(MapAppearance::Dark));
++    mapAppearanceGroup->addButton(radioButton, static_cast<int>(ut::ThemeMode::Dark));
+ 
+     mapAppearanceRadioBox->setLayout(layout);
++    mapAppearanceGroup->button(static_cast<int>(ut::Theme::Instance().Mode()))->setChecked(true);
+ 
+-    int const btn = framework.CurrentMapAppearance() == MapAppearance::Light ? 0 : 1;
+-    mapAppearanceGroup->button(btn)->setChecked(true);
++    connect(mapAppearanceGroup, &QButtonGroup::idClicked,
++            [](int i) { ut::Theme::Instance().SetMode(static_cast<ut::ThemeMode>(i)); });
++  }
+ 
+-    void (QButtonGroup::*buttonClicked)(int) = &QButtonGroup::idClicked;
+-    connect(mapAppearanceGroup, buttonClicked, [&framework](int i)
+-    { framework.SwitchToMapAppearance(i == 0 ? MapAppearance::Light : MapAppearance::Dark); });
++  // ut-comaps: user interface language (texts of CoMaps: search, place types,
++  // routing, countries). Read once at start, so it applies after a restart.
++  QLabel * uiLanguageLabel = new QLabel("Language (after restart)");
++  QComboBox * uiLanguageComboBox = new QComboBox();
++  {
++    uiLanguageComboBox->setStyleSheet("QComboBox { combobox-popup: 0; }");
++    uiLanguageComboBox->setMaxVisibleItems(10);
++    uiLanguageComboBox->addItem("Like the phone", QString());
++    for (auto const & [code, name] : ut::UiLanguages())
++      uiLanguageComboBox->addItem(QString::fromStdString(name), QString::fromStdString(code));
++    int const current = uiLanguageComboBox->findData(QString::fromStdString(ut::StoredLanguage()));
++    uiLanguageComboBox->setCurrentIndex(current < 0 ? 0 : current);
++
++    connect(uiLanguageComboBox, &QComboBox::currentIndexChanged, [this, uiLanguageComboBox](int index)
++    {
++      std::string const code = uiLanguageComboBox->itemData(index).toString().toStdString();
++      if (code == ut::StoredLanguage())
++        return;
++      ut::StoreLanguage(code);
++      QMessageBox::information(this, windowTitle(), "The language changes when CoMaps is started again.");
++    });
+   }
+ 
+ #ifdef BUILD_DESIGNER
+@@ -259,6 +285,8 @@ PreferencesDialog::PreferencesDialog(QWidget * parent, Framework & framework)
+   finalLayout->addWidget(alternativeMapLanguageHandlingLabel);
+   finalLayout->addWidget(alternativeMapLanguageHandlingComboBox);
+   finalLayout->addWidget(mapAppearanceRadioBox);
++  finalLayout->addWidget(uiLanguageLabel);
++  finalLayout->addWidget(uiLanguageComboBox);
+   finalLayout->addWidget(showBookmarkLabelsCheckBox);
+ #ifdef BUILD_DESIGNER
+   finalLayout->addWidget(indexRegenCheckBox);
+diff --git a/qt/ut_integration.cpp b/qt/ut_integration.cpp
+new file mode 100644
+index 0000000..d2da5fe
+--- /dev/null
++++ b/qt/ut_integration.cpp
+@@ -0,0 +1,236 @@
++#include "qt/ut_integration.hpp"
++
++#include "map/framework.hpp"
++
++#include "platform/settings.hpp"
++
++#include "base/logging.hpp"
++
++#include <QtCore/QDir>
++#include <QtCore/QFileInfo>
++#include <QtCore/QSettings>
++#include <QtGui/QColor>
++#include <QtGui/QPalette>
++#include <QtWidgets/QApplication>
++#include <QtWidgets/QStyle>
++#include <QtWidgets/QStyleFactory>
++
++#include <cstdlib>
++
++namespace ut
++{
++namespace
++{
++std::string_view constexpr kThemeSetting = "UtThemeMode";
++std::string_view constexpr kLanguageSetting = "UtLanguage";
++
++// Lomiri keeps the phone's theme here, e.g. "Lomiri.Components.Themes.SuruDark".
++char const * const kLomiriThemeFile = "/.config/lomiri-ui-toolkit/theme.ini";
++
++ThemeMode ThemeModeFromString(std::string const & s)
++{
++  if (s == "light")
++    return ThemeMode::Light;
++  if (s == "dark")
++    return ThemeMode::Dark;
++  return ThemeMode::System;
++}
++
++std::string ThemeModeToString(ThemeMode mode)
++{
++  switch (mode)
++  {
++  case ThemeMode::Light: return "light";
++  case ThemeMode::Dark: return "dark";
++  case ThemeMode::System: break;
++  }
++  return "system";
++}
++
++QPalette DarkPalette()
++{
++  QColor const window(0x20, 0x23, 0x26);
++  QColor const base(0x16, 0x18, 0x1a);
++  QColor const alternateBase(0x26, 0x2a, 0x2d);
++  QColor const button(0x2c, 0x31, 0x34);
++  QColor const text(0xee, 0xee, 0xee);
++  QColor const disabledText(0x80, 0x80, 0x80);
++  QColor const highlight(0x4a, 0xa3, 0xf0);
++
++  QPalette p;
++  p.setColor(QPalette::Window, window);
++  p.setColor(QPalette::WindowText, text);
++  p.setColor(QPalette::Base, base);
++  p.setColor(QPalette::AlternateBase, alternateBase);
++  p.setColor(QPalette::ToolTipBase, button);
++  p.setColor(QPalette::ToolTipText, text);
++  p.setColor(QPalette::PlaceholderText, disabledText);
++  p.setColor(QPalette::Text, text);
++  p.setColor(QPalette::Button, button);
++  p.setColor(QPalette::ButtonText, text);
++  p.setColor(QPalette::BrightText, Qt::white);
++  p.setColor(QPalette::Light, QColor(0x3a, 0x3f, 0x43));
++  p.setColor(QPalette::Midlight, QColor(0x33, 0x38, 0x3b));
++  p.setColor(QPalette::Mid, QColor(0x26, 0x2a, 0x2d));
++  p.setColor(QPalette::Dark, QColor(0x12, 0x14, 0x16));
++  p.setColor(QPalette::Shadow, Qt::black);
++  p.setColor(QPalette::Highlight, highlight);
++  p.setColor(QPalette::HighlightedText, Qt::black);
++  p.setColor(QPalette::Link, highlight);
++  p.setColor(QPalette::LinkVisited, QColor(0xb3, 0x88, 0xff));
++
++  p.setColor(QPalette::Disabled, QPalette::WindowText, disabledText);
++  p.setColor(QPalette::Disabled, QPalette::Text, disabledText);
++  p.setColor(QPalette::Disabled, QPalette::ButtonText, disabledText);
++  p.setColor(QPalette::Disabled, QPalette::Highlight, QColor(0x50, 0x50, 0x50));
++  p.setColor(QPalette::Disabled, QPalette::HighlightedText, disabledText);
++  return p;
++}
++}  // namespace
++
++// --- Language -----------------------------------------------------------------
++
++std::vector<std::pair<std::string, std::string>> const & UiLanguages()
++{
++  // Languages CoMaps ships texts for (search categories, place types, routing,
++  // countries). Each is named in itself, so everyone finds their own.
++  static std::vector<std::pair<std::string, std::string>> const kLanguages = {
++      {"en", "English"},    {"de", "Deutsch"},    {"fr", "Français"},  {"es", "Español"},
++      {"it", "Italiano"},   {"nl", "Nederlands"}, {"pl", "Polski"},    {"pt", "Português"},
++      {"cs", "Čeština"},    {"sk", "Slovenčina"}, {"hu", "Magyar"},    {"da", "Dansk"},
++      {"sv", "Svenska"},    {"nb", "Norsk"},      {"fi", "Suomi"},     {"el", "Ελληνικά"},
++      {"tr", "Türkçe"},     {"uk", "Українська"}, {"ru", "Русский"},   {"ja", "日本語"},
++  };
++  return kLanguages;
++}
++
++std::string StoredLanguage()
++{
++  std::string code;
++  if (!settings::Get(kLanguageSetting, code))
++    return {};
++  for (auto const & language : UiLanguages())
++    if (language.first == code)
++      return code;
++  return {};
++}
++
++void StoreLanguage(std::string const & code)
++{
++  settings::Set(kLanguageSetting, code);
++}
++
++void ApplyStoredLanguage()
++{
++  std::string const code = StoredLanguage();
++  if (code.empty())
++  {
++    LOG(LINFO, ("UT: user interface language like the phone:", std::getenv("LANGUAGE") ? std::getenv("LANGUAGE") : ""));
++    return;
++  }
++  // CoMaps reads LANGUAGE before LANG; Qt's own texts follow LANGUAGE as well.
++  (void)::setenv("LANGUAGE", code.c_str(), 1);
++  LOG(LINFO, ("UT: user interface language chosen:", code));
++}
++
++// --- Theme --------------------------------------------------------------------
++
++Theme & Theme::Instance()
++{
++  static Theme theme;
++  return theme;
++}
++
++Theme::Theme() : m_themeFile(QDir::homePath() + QLatin1String(kLomiriThemeFile))
++{
++  std::string stored;
++  if (settings::Get(kThemeSetting, stored))
++    m_mode = ThemeModeFromString(stored);
++
++  // The settings app replaces the file, which drops a file watch; watching the
++  // folder as well catches the new file.
++  QString const folder = QFileInfo(m_themeFile).absolutePath();
++  if (QFileInfo::exists(folder))
++    m_watcher.addPath(folder);
++  connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, [this] { ReadSystemTheme(); });
++  connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, [this] { ReadSystemTheme(); });
++  ReadSystemTheme();
++}
++
++void Theme::ReadSystemTheme()
++{
++  if (QFileInfo::exists(m_themeFile) && !m_watcher.files().contains(m_themeFile))
++    m_watcher.addPath(m_themeFile);
++
++  // QSettings maps the [General] section of an INI file to top-level keys.
++  QString const theme = QSettings(m_themeFile, QSettings::IniFormat).value(QStringLiteral("theme")).toString();
++  bool const dark = theme.contains(QLatin1String("Dark"), Qt::CaseInsensitive);
++  if (dark == m_systemDark && m_applied)
++    return;
++  m_systemDark = dark;
++  LOG(LINFO, ("UT: phone theme", theme.toStdString(), dark ? "(dark)" : "(light)"));
++  if (m_mode == ThemeMode::System)
++    Apply();
++}
++
++bool Theme::IsDark() const
++{
++  switch (m_mode)
++  {
++  case ThemeMode::Light: return false;
++  case ThemeMode::Dark: return true;
++  case ThemeMode::System: break;
++  }
++  return m_systemDark;
++}
++
++void Theme::SetMode(ThemeMode mode)
++{
++  if (mode == m_mode)
++    return;
++  m_mode = mode;
++  settings::Set(kThemeSetting, ThemeModeToString(mode));
++  Apply();
++}
++
++void Theme::ApplyToApplication()
++{
++  // Fusion draws everything from the palette, so light and dark both stay readable.
++  if (QStyle * fusion = QStyleFactory::create(QStringLiteral("Fusion")))
++    QApplication::setStyle(fusion);
++  m_applied = false;
++  Apply();
++}
++
++void Theme::AttachFramework(Framework & framework)
++{
++  m_framework = &framework;
++  framework.SwitchToMapAppearance(IsDark() ? MapAppearance::Dark : MapAppearance::Light);
++}
++
++void Theme::DetachFramework()
++{
++  m_framework = nullptr;
++}
++
++void Theme::Apply()
++{
++  if (qApp == nullptr)
++    return;
++
++  bool const dark = IsDark();
++  if (m_applied && dark == m_appliedDark)
++    return;
++
++  QApplication::setPalette(dark ? DarkPalette() : QApplication::style()->standardPalette());
++  if (m_framework != nullptr)
++    m_framework->SwitchToMapAppearance(dark ? MapAppearance::Dark : MapAppearance::Light);
++
++  bool const changed = m_applied;
++  m_applied = true;
++  m_appliedDark = dark;
++  LOG(LINFO, ("UT: appearance", ThemeModeToString(m_mode), dark ? "-> dark" : "-> light"));
++  if (changed)
++    emit DarkChanged(dark);
++}
++}  // namespace ut
+diff --git a/qt/ut_integration.hpp b/qt/ut_integration.hpp
+new file mode 100644
+index 0000000..c9b86c3
+--- /dev/null
++++ b/qt/ut_integration.hpp
+@@ -0,0 +1,73 @@
++#pragma once
++
++// Ubuntu Touch integration of the desktop frontend (ut-comaps):
++//  - appearance: light or dark for the widgets and the map together, either
++//    following the phone's Lomiri theme or fixed by the user;
++//  - user interface language: like the phone or one fixed language.
++// Both choices live in the CoMaps settings (settings.ini in the data folder).
++
++#include <QtCore/QFileSystemWatcher>
++#include <QtCore/QObject>
++#include <QtCore/QString>
++
++#include <string>
++#include <utility>
++#include <vector>
++
++class Framework;
++
++namespace ut
++{
++enum class ThemeMode : int
++{
++  System = 0,
++  Light = 1,
++  Dark = 2,
++};
++
++// Sets LANGUAGE from the stored choice. Must run after the data path is set
++// and before anything asks for the system languages (they are cached).
++void ApplyStoredLanguage();
++
++// "" means like the phone, otherwise a code from UiLanguages().
++std::string StoredLanguage();
++void StoreLanguage(std::string const & code);
++
++// Languages offered for the user interface: (code, name in that language).
++std::vector<std::pair<std::string, std::string>> const & UiLanguages();
++
++class Theme : public QObject
++{
++  Q_OBJECT
++
++public:
++  static Theme & Instance();
++
++  ThemeMode Mode() const { return m_mode; }
++  void SetMode(ThemeMode mode);
++  bool IsDark() const;
++
++  // Sets the Fusion style and the palette; call once after QApplication exists.
++  void ApplyToApplication();
++  // From now on the map style follows the appearance as well.
++  void AttachFramework(Framework & framework);
++  void DetachFramework();
++
++signals:
++  void DarkChanged(bool dark);
++
++private:
++  Theme();
++
++  void ReadSystemTheme();
++  void Apply();
++
++  ThemeMode m_mode = ThemeMode::System;
++  bool m_systemDark = false;
++  bool m_appliedDark = false;
++  bool m_applied = false;
++  Framework * m_framework = nullptr;
++  QFileSystemWatcher m_watcher;
++  QString m_themeFile;
++};
++}  // namespace ut

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=CoMaps
+Comment=Offline maps & navigation (OpenStreetMap)
+Exec=comaps
+Icon=ut-comaps.svg
+Terminal=false
+Type=Application
+Categories=Navigation;Utility;Maps;
+Keywords=maps;navigation;osm;offline;
+X-Lomiri-Touch=true

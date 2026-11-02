@@ -1,0 +1,39 @@
+# Build container for CoMaps on Ubuntu Touch (Noble / 24.04, arm64).
+#
+# CoMaps officially supports Ubuntu 24.04 as build base (see docs/INSTALL_DESKTOP.md):
+# Qt 6.4+ (noble: 6.4.2), CMake >= 3.22.1 (noble: 3.28), FreeType >= 2.13.1 (noble: 2.13.2).
+#
+# On an amd64 host, build this image explicitly for arm64 first:
+#   docker build --platform linux/arm64 -t ut-comaps:noble-arm64 -f Dockerfile.noble-arm64 .
+# clickable.json uses this image name ("docker_image": "ut-comaps:noble-arm64").
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash git curl wget jq file rsync pkg-config ccache \
+        build-essential clang cmake ninja-build \
+        python3 python3-venv python3-pip \
+        qt6-base-dev \
+        qt6-positioning-dev \
+        qt6-svg-dev \
+        libqt6positioning6-plugins \
+        qt6-wayland \
+        libfreetype-dev \
+        libglvnd-dev \
+        libgl1-mesa-dev \
+        libgl1-mesa-dri \
+        libharfbuzz-dev \
+        libicu-dev \
+        libsqlite3-dev \
+        libxrandr-dev \
+        libxinerama-dev \
+        libxcursor-dev \
+        libxi-dev \
+        zlib1g-dev \
+        libc++-dev \
+        click \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /project

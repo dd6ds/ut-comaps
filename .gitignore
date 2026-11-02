@@ -1,0 +1,6 @@
+build/
+source/
+*.click
+*.zip
+.ccache/
+dist/
