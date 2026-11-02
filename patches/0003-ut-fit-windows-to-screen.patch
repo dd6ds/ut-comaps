@@ -12,18 +12,18 @@ index 0f60435..220ed5e 100644
  )
 diff --git a/qt/ut_fit_screen.cpp b/qt/ut_fit_screen.cpp
 new file mode 100644
-index 0000000..08d6c53
+index 0000000..b299e39
 --- /dev/null
 +++ b/qt/ut_fit_screen.cpp
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,100 @@
 +// Ubuntu Touch: make CoMaps' desktop windows fit a phone screen.
 +//
 +// The CoMaps Qt frontend is written for desktops: dialogs use fixed start
 +// sizes (e.g. resize(900, 600)) and layouts with large minimum sizes. On a
 +// phone (1080x2400 at scale 2.625 = ~411x914 logical px) they run off screen.
 +// This installs an application-wide event filter (no changes to the individual
-+// dialogs needed) that clamps every top-level window to the available screen
-+// geometry when it is shown.
++// dialogs needed): the main window and every large dialog are shown maximized
++// (= full available screen, the only placement Lomiri lets a client request).
 +#include <QApplication>
 +#include <QDebug>
 +#include <QDialog>
@@ -80,23 +80,24 @@ index 0000000..08d6c53
 +      return;
 +    }
 +
-+    bool const tooWide = w->width() > avail.width() || w->minimumWidth() > avail.width();
-+    bool const tooHigh = w->height() > avail.height() || w->minimumHeight() > avail.height();
-+    if (!tooWide && !tooHigh)
++    // Wayland: a client cannot position its own windows. Lomiri places dialogs
++    // offset from the main window (~85 x 250 logical px on a phone), so moving
++    // or merely shrinking them still leaves them partly off screen. What Lomiri
++    // does honour is the maximized state (tested on UT 24.04-2): the dialog then
++    // fills the screen below the indicator bar, like a mobile page.
++    // Small dialogs (message boxes, short prompts) are left alone.
++    bool const big = w->width() > avail.width() * 3 / 4 || w->height() > avail.height() * 3 / 5 ||
++                     w->minimumWidth() > avail.width() || w->minimumHeight() > avail.height();
++    if (!big)
 +      return;
 +
 +    // A top-level layout forces its minimumSizeHint on the window; release it
-+    // so the window can shrink to the screen (contents may get tighter).
++    // so the maximized window can be smaller than the desktop layout wanted.
 +    if (QLayout * layout = w->layout())
 +      layout->setSizeConstraint(QLayout::SetNoConstraint);
-+    w->setMinimumSize(std::min(w->minimumWidth(), avail.width()), std::min(w->minimumHeight(), avail.height()));
-+
-+    QSize const size(std::min(w->width(), avail.width()), std::min(w->height(), avail.height()));
-+    QRect geom(QPoint(0, 0), size);
-+    geom.moveCenter(avail.center());
-+    geom.moveTop(std::max(geom.top(), avail.top()));
-+    geom.moveLeft(std::max(geom.left(), avail.left()));
-+    w->setGeometry(geom);
++    w->setMinimumSize(0, 0);
++    if (!(w->windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen)))
++      w->setWindowState(w->windowState() | Qt::WindowMaximized);
 +  }
 +};
 +
