@@ -23,6 +23,21 @@ if [ "${COMAPS_SKIP_PYTHON_VENV:-0}" = "1" ]; then
 fi
 ./configure.sh
 
+# 1b) Symbol skins (data/symbols/<dpi>/<style>/symbols.png|sdf). They are not in
+#     git; without them the map has no POI icons ("unknown symbol" warnings).
+#     generate_symbols.sh silently exits 0 when optipng is missing, so check.
+if ! ls data/symbols/xhdpi/light/symbols.png >/dev/null 2>&1; then
+    command -v optipng >/dev/null || { echo "[ut-comaps] ERROR: optipng missing (needed for symbols)" >&2; exit 1; }
+    echo "[ut-comaps] Generating symbol skins ..."
+    tools/unix/generate_symbols.sh
+fi
+for s in light dark; do
+    if [ ! -f "data/symbols/xhdpi/$s/symbols.png" ]; then
+        echo "[ut-comaps] ERROR: data/symbols/xhdpi/$s/symbols.png was not generated." >&2
+        exit 1
+    fi
+done
+
 # 2) Build the desktop app, release flavour.
 #    tools/unix/build_omim.sh puts the result into ../omim-build-release
 #    (i.e. source/omim-build-release).

@@ -4,7 +4,11 @@
 # and the read-only/writable data paths, then execs the real binary.
 set -e
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
+# NOTE: Under the UT 24.04 AppArmor profile (policy 2404.x) a confined app may
+# not exec /usr/bin/* tools (dirname, awk, mkdir, ...). Only bash builtins and
+# binaries inside the click dir are allowed. Keep this script builtin-only.
+HERE="${BASH_SOURCE[0]%/*}"
+[ "$HERE" = "${BASH_SOURCE[0]}" ] && HERE="$PWD"
 
 export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export QT_PLUGIN_PATH="$HERE/lib/plugins"
@@ -15,7 +19,13 @@ export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
 # Lomiri exports GRID_UNIT_PX (8 on a desktop, ~18-27 on a phone). Qt Widgets
 # know nothing of it, so scale the whole UI to the same size as native apps.
 if [ -z "${QT_SCALE_FACTOR:-}" ] && [ -n "${GRID_UNIT_PX:-}" ]; then
-    export QT_SCALE_FACTOR="$(awk -v g="$GRID_UNIT_PX" 'BEGIN { printf "%.2f", g / 8 }')"
+    # g / 8 with two decimals, bash integer arithmetic only (no awk).
+    g="${GRID_UNIT_PX%%.*}"
+    if [[ "$g" =~ ^[0-9]+$ ]] && [ "$g" -gt 0 ]; then
+        c=$(( g * 25 / 2 ))   # = g / 8 * 100
+        printf -v QT_SCALE_FACTOR '%d.%02d' $(( c / 100 )) $(( c % 100 ))
+        export QT_SCALE_FACTOR
+    fi
 fi
 
 # Confined apps may only write below ~/.local/share/<click name> (and .cache,
@@ -23,6 +33,19 @@ fi
 PKG="ut-comaps"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}/$PKG"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-mkdir -p "$DATA" "$XDG_CACHE_HOME/$PKG"
+# CoMaps puts its settings in QStandardPaths::GenericConfigLocation + "/CoMaps"
+# (= $XDG_CONFIG_HOME/CoMaps). AppArmor only allows ~/.config/<click name>/,
+# so point XDG_CONFIG_HOME there -> ~/.config/ut-comaps/CoMaps.
+# (The Lomiri theme file is read via $HOME, so this does not affect it.)
+CONF="$HOME/.config/$PKG"
+export XDG_CONFIG_HOME="$CONF"
+# Set CoMaps' own dirs before Platform() guesses defaults (~/.local/share/CoMaps).
+export MWM_WRITABLE_DIR="$DATA/"
+export MWM_RESOURCES_DIR="$HERE/data/"
+# bash has no mkdir builtin and /usr/bin/mkdir is denied, so package.sh bundles
+# a copy inside the click (exec from the click dir is allowed).
+if [ ! -d "$DATA" ] || [ ! -d "$CONF" ] || [ ! -d "$XDG_CACHE_HOME/$PKG" ]; then
+    "$HERE/bin/mkdir" -p "$DATA" "$CONF" "$XDG_CACHE_HOME/$PKG" || true
+fi
 
 exec "$HERE/comaps.bin" -resources_path "$HERE/data/" -data_path "$DATA/" "$@"

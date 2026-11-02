@@ -26,6 +26,9 @@ sed -e "s/@CLICK_VERSION@/$VERSION/" \
     manifest.in.json > "$CLICK_DIR/manifest.json"
 cp ut-comaps.desktop ut-comaps.apparmor icons/ut-comaps.svg "$CLICK_DIR/"
 install -m 755 launch/comaps "$CLICK_DIR/comaps"
+# The 2404.x AppArmor profile forbids exec of /usr/bin/*; the launcher needs
+# mkdir, so ship coreutils' mkdir inside the click (exec there is allowed).
+install -D -m 755 "$(command -v mkdir)" "$CLICK_DIR/bin/mkdir"
 install -m 755 "$BIN" "$CLICK_DIR/comaps.bin"
 
 # --- App resources (drules, fonts, symbols, classificator, World.mwm, ...) ---

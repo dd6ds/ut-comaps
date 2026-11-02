@@ -1,0 +1,17 @@
+diff --git a/qt/qt_common/qtoglcontext.cpp b/qt/qt_common/qtoglcontext.cpp
+index f651725..e8ef56c 100644
+--- a/qt/qt_common/qtoglcontext.cpp
++++ b/qt/qt_common/qtoglcontext.cpp
+@@ -107,7 +107,11 @@ GLuint QtRenderOGLContext::GetTextureHandle() const
+   if (!m_acquiredFrame)
+     return 0;
+ 
+-  CHECK(!m_acquiredFrame->isBound(), ());
++  // Ubuntu Touch: QOpenGLFramebufferObject::isBound() only compares the FBO
++  // *name* bound in the current (GUI) context with this FBO's name, which was
++  // created in the render context. FBO names are not shared between contexts,
++  // so on libhybris the QOpenGLWidget's own FBO often has the same number and
++  // the check fires although nothing is wrong. Do not abort on it.
+   return m_acquiredFrame->texture();
+ }
+ 
