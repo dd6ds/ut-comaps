@@ -51,7 +51,7 @@ fi
 mkdir -p "$CLICK_DIR/lib/plugins"
 for p in platforms platforminputcontexts imageformats iconengines \
          wayland-shell-integration wayland-graphics-integration-client \
-         wayland-decoration-client position; do
+         wayland-decoration-client position tls networkinformation; do
     [ -d "$PLUGINS/$p" ] && cp -a "$PLUGINS/$p" "$CLICK_DIR/lib/plugins/"
 done
 # Maliit input context (QT_IM_MODULE=maliit on Lomiri) -> on-screen keyboard.
