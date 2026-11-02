@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icons/ut-comaps.svg" alt="ut-comaps Icon" width="128" height="128">
+</p>
+
 # CoMaps für Ubuntu Touch – Portierungs-Scaffold
 
 Click-Package-Gerüst (clickable) zum Bauen von [CoMaps](https://codeberg.org/comaps/comaps)
