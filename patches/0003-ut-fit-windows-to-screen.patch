@@ -1,0 +1,117 @@
+diff --git a/qt/CMakeLists.txt b/qt/CMakeLists.txt
+index 0f60435..220ed5e 100644
+--- a/qt/CMakeLists.txt
++++ b/qt/CMakeLists.txt
+@@ -63,6 +63,7 @@ set(SRC
+   star_rating_widget.hpp
+   update_dialog.cpp
+   update_dialog.hpp
++  ut_fit_screen.cpp
+   ut_integration.cpp
+   ut_integration.hpp
+ )
+diff --git a/qt/ut_fit_screen.cpp b/qt/ut_fit_screen.cpp
+new file mode 100644
+index 0000000..08d6c53
+--- /dev/null
++++ b/qt/ut_fit_screen.cpp
+@@ -0,0 +1,99 @@
++// Ubuntu Touch: make CoMaps' desktop windows fit a phone screen.
++//
++// The CoMaps Qt frontend is written for desktops: dialogs use fixed start
++// sizes (e.g. resize(900, 600)) and layouts with large minimum sizes. On a
++// phone (1080x2400 at scale 2.625 = ~411x914 logical px) they run off screen.
++// This installs an application-wide event filter (no changes to the individual
++// dialogs needed) that clamps every top-level window to the available screen
++// geometry when it is shown.
++#include <QApplication>
++#include <QDebug>
++#include <QDialog>
++#include <QEvent>
++#include <QGuiApplication>
++#include <QLayout>
++#include <QMainWindow>
++#include <QScreen>
++#include <QTimer>
++#include <QWidget>
++
++#include <algorithm>
++
++namespace
++{
++class FitToScreenFilter : public QObject
++{
++public:
++  using QObject::QObject;
++
++protected:
++  bool eventFilter(QObject * obj, QEvent * ev) override
++  {
++    if (ev->type() == QEvent::Show && obj->isWidgetType())
++    {
++      auto * w = static_cast<QWidget *>(obj);
++      if (w->isWindow() && !IsTransient(w))
++        Fit(w);
++    }
++    return QObject::eventFilter(obj, ev);
++  }
++
++private:
++  static bool IsTransient(QWidget const * w)
++  {
++    auto const type = w->windowType();
++    return type == Qt::Popup || type == Qt::ToolTip || type == Qt::SplashScreen || type == Qt::Desktop;
++  }
++
++  static void Fit(QWidget * w)
++  {
++    QScreen * screen = w->screen() ? w->screen() : QGuiApplication::primaryScreen();
++    if (!screen)
++      return;
++    QRect const avail = screen->availableGeometry();
++
++    // The main window: let it fill the screen (Lomiri shows phone apps full screen).
++    if (qobject_cast<QMainWindow *>(w))
++    {
++      if (w->minimumWidth() > avail.width() || w->minimumHeight() > avail.height())
++        w->setMinimumSize(0, 0);
++      if (!(w->windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen)))
++        w->setWindowState(w->windowState() | Qt::WindowMaximized);
++      return;
++    }
++
++    bool const tooWide = w->width() > avail.width() || w->minimumWidth() > avail.width();
++    bool const tooHigh = w->height() > avail.height() || w->minimumHeight() > avail.height();
++    if (!tooWide && !tooHigh)
++      return;
++
++    // A top-level layout forces its minimumSizeHint on the window; release it
++    // so the window can shrink to the screen (contents may get tighter).
++    if (QLayout * layout = w->layout())
++      layout->setSizeConstraint(QLayout::SetNoConstraint);
++    w->setMinimumSize(std::min(w->minimumWidth(), avail.width()), std::min(w->minimumHeight(), avail.height()));
++
++    QSize const size(std::min(w->width(), avail.width()), std::min(w->height(), avail.height()));
++    QRect geom(QPoint(0, 0), size);
++    geom.moveCenter(avail.center());
++    geom.moveTop(std::max(geom.top(), avail.top()));
++    geom.moveLeft(std::max(geom.left(), avail.left()));
++    w->setGeometry(geom);
++  }
++};
++
++void InstallFitToScreen()
++{
++  auto * app = QCoreApplication::instance();
++  app->installEventFilter(new FitToScreenFilter(app));
++
++  // Log the screen setup once the GUI is up (helps tuning ~/.config/ut-comaps/scale).
++  QTimer::singleShot(0, [] {
++    if (QScreen * s = QGuiApplication::primaryScreen())
++      qInfo() << "[ut] screen" << s->geometry() << "available" << s->availableGeometry()
++              << "devicePixelRatio" << s->devicePixelRatio() << "logicalDpi" << s->logicalDotsPerInch();
++  });
++}
++}  // namespace
++
++Q_COREAPP_STARTUP_FUNCTION(InstallFitToScreen)

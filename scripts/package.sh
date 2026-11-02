@@ -54,6 +54,17 @@ for p in platforms platforminputcontexts imageformats iconengines \
          wayland-decoration-client position; do
     [ -d "$PLUGINS/$p" ] && cp -a "$PLUGINS/$p" "$CLICK_DIR/lib/plugins/"
 done
+# Maliit input context (QT_IM_MODULE=maliit on Lomiri) -> on-screen keyboard.
+# Built into the Docker image by scripts/build-maliit-qt6.sh.
+MALIIT_PLUGIN="${MALIIT_QT6_PLUGIN:-/opt/maliit-qt6/libmaliitplatforminputcontextplugin.so}"
+if [ -f "$MALIIT_PLUGIN" ]; then
+    mkdir -p "$CLICK_DIR/lib/plugins/platforminputcontexts"
+    install -m 644 "$MALIIT_PLUGIN" "$CLICK_DIR/lib/plugins/platforminputcontexts/"
+else
+    echo "[ut-comaps] ERROR: $MALIIT_PLUGIN missing - no on-screen keyboard." >&2
+    echo "            Rebuild the Docker image (Dockerfile.noble-arm64)." >&2
+    exit 1
+fi
 
 # --- Runtime libraries (Qt6 and its deps) ------------------------------------
 # Bundles every shared library the binary and the plugins need, except those

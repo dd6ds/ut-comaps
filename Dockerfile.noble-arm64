@@ -35,6 +35,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zlib1g-dev \
         libc++-dev \
         click \
+        qt6-base-private-dev qt6-declarative-dev libdbus-1-dev patch xz-utils \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Maliit input context plugin for Qt6 (on-screen keyboard on Ubuntu Touch).
+# Not packaged for Noble; built against Noble's exact Qt (private API).
+COPY scripts/build-maliit-qt6.sh /tmp/build-maliit-qt6.sh
+RUN /tmp/build-maliit-qt6.sh /opt/maliit-qt6 && rm /tmp/build-maliit-qt6.sh
 
 WORKDIR /project
