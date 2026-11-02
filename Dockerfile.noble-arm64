@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1-mesa-dri \
         libharfbuzz-dev \
         libicu-dev \
+        icu-devtools \
         libsqlite3-dev \
         libxrandr-dev \
         libxinerama-dev \

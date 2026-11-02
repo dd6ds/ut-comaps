@@ -27,6 +27,11 @@ else
     git -C "$SRC" clean -qfd
     git -C "$SRC" checkout -q --detach FETCH_HEAD
 fi
-git -C "$SRC" submodule update --init --recursive --depth 1
+# FreeType kommt laut .gitmodules von gitlab.freedesktop.org, das Cloud-/CI-IPs
+# per Bot-Schutz abweist. Der offizielle GitHub-Spiegel hat dieselben Commits.
+# --force checkt halb ausgecheckte Submodule (abgebrochener Lauf) neu aus.
+git -C "$SRC" \
+    -c url."https://github.com/freetype/freetype.git".insteadOf=https://gitlab.freedesktop.org/freetype/freetype.git \
+    submodule update --init --recursive --depth 1 --force
 
 echo "[ut-comaps] Source checkout done: $(git -C "$SRC" rev-parse --short HEAD)"
