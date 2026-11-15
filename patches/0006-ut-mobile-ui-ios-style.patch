@@ -1044,6 +1044,202 @@ index 70355ac..3e40b3d 100644
    void OnSearchTextChanged(QString const & str);
    void OnSearchResults(uint64_t timestamp, search::Results results);
  
+diff --git a/qt/update_dialog.cpp b/qt/update_dialog.cpp
+index 2592356..eb5d315 100644
+--- a/qt/update_dialog.cpp
++++ b/qt/update_dialog.cpp
+@@ -1,4 +1,5 @@
+ #include "qt/update_dialog.hpp"
++#include "qt/ut_mobile_ui.hpp"
+ 
+ #include "storage/downloader_search_params.hpp"
+ #include "storage/storage_defines.hpp"
+@@ -39,13 +40,14 @@ enum
+   KNumberOfColumns
+ };
+ 
+-#define COLOR_NOTDOWNLOADED  Qt::black
+-#define COLOR_ONDISK         Qt::darkGreen
+-#define COLOR_INPROGRESS     Qt::blue
+-#define COLOR_DOWNLOADFAILED Qt::red
+-#define COLOR_INQUEUE        Qt::gray
+-#define COLOR_OUTOFDATE      Qt::magenta
+-#define COLOR_MIXED          Qt::yellow
++// ut-comaps: readable on the light and the dark appearance.
++#define COLOR_NOTDOWNLOADED  qt::mobile::CurrentStyle().text
++#define COLOR_ONDISK         qt::mobile::CurrentStyle().accent
++#define COLOR_INPROGRESS     qt::mobile::CurrentStyle().locationBlue
++#define COLOR_DOWNLOADFAILED QColor(0xff, 0x45, 0x3a)
++#define COLOR_INQUEUE        qt::mobile::CurrentStyle().secondary
++#define COLOR_OUTOFDATE      QColor(0xff, 0x9f, 0x0a)
++#define COLOR_MIXED          QColor(0xff, 0xd6, 0x0a)
+ 
+ namespace
+ {
+@@ -93,17 +95,17 @@ UpdateDialog::UpdateDialog(QWidget * parent, Framework & framework)
+   m_pCheckUpdatesLabel = new QLabel();
+   // Ubuntu Touch: status texts can be long; wrap them instead of widening the window.
+   m_pCheckUpdatesLabel->setWordWrap(true);
+-  m_pCheckUpdatesButton = new QPushButton(QObject::tr("Check for updates"), this);
++  m_pCheckUpdatesButton = new QPushButton(qt::mobile::Tr("Check for updates", "Auf Updates prüfen"), this);
+   connect(m_pCheckUpdatesButton, &QAbstractButton::clicked, this, &UpdateDialog::OnCheckUpdatesClick);
+ 
+-  QPushButton * closeButton = new QPushButton(QObject::tr("Close"), this);
++  QPushButton * closeButton = new QPushButton(qt::mobile::Tr("Close", "Schließen"), this);
+   closeButton->setDefault(true);
+   connect(closeButton, &QAbstractButton::clicked, this, &UpdateDialog::OnCloseClick);
+ 
+   m_tree = new QTreeWidget(this);
+   m_tree->setColumnCount(KNumberOfColumns);
+   QStringList columnLabels;
+-  columnLabels << tr("Country") << tr("Status") << tr("Size") << tr("Matched by") << tr("Rank");
++  columnLabels << qt::mobile::Tr("Region", "Region") << qt::mobile::Tr("Status", "Status") << qt::mobile::Tr("Size", "Größe") << tr("Matched by") << tr("Rank");
+   m_tree->setHeaderLabels(columnLabels);
+ 
+   m_tree->setColumnHidden(KColumnIndexPositionInRanking, true);
+@@ -142,7 +144,7 @@ UpdateDialog::UpdateDialog(QWidget * parent, Framework & framework)
+   localeLabel->setVisible(false);
+   localeEdit->setVisible(false);
+   queryLabel->setVisible(false);
+-  queryEdit->setPlaceholderText(tr("Search country or region"));
++  queryEdit->setPlaceholderText(qt::mobile::Tr("Find map", "Karte finden"));
+   queryEdit->setClearButtonEnabled(true);
+   connect(queryEdit, &QLineEdit::textChanged, this, &UpdateDialog::OnQueryTextChanged);
+ 
+@@ -160,7 +162,7 @@ UpdateDialog::UpdateDialog(QWidget * parent, Framework & framework)
+   verticalLayout->addLayout(horizontalLayout);
+   setLayout(verticalLayout);
+ 
+-  setWindowTitle(tr("Geographical Regions"));
++  setWindowTitle(qt::mobile::Tr("Download maps", "Karten herunterladen"));
+   // Ubuntu Touch: fill the phone screen instead of a fixed 900x600 desktop size.
+   if (QScreen const * screen = QGuiApplication::primaryScreen())
+     resize(screen->availableGeometry().size());
+@@ -203,10 +205,10 @@ void UpdateDialog::OnItemClick(QTreeWidgetItem * item, int column)
+     // Map is already downloaded, so ask user about deleting.
+     QMessageBox ask(this);
+     ask.setIcon(QMessageBox::Question);
+-    ask.setText(tr("Do you want to update or delete %1?").arg(countryId.c_str()));
+-    QPushButton * const btnUpdate = ask.addButton(tr("Update"), QMessageBox::ActionRole);
+-    QPushButton * const btnDelete = ask.addButton(tr("Delete"), QMessageBox::ActionRole);
+-    QPushButton * const btnCancel = ask.addButton(tr("Cancel"), QMessageBox::NoRole);
++    ask.setText(qt::mobile::Tr("Do you want to update or delete %1?", "%1 aktualisieren oder löschen?").arg(countryId.c_str()));
++    QPushButton * const btnUpdate = ask.addButton(qt::mobile::Tr("Update", "Aktualisieren"), QMessageBox::ActionRole);
++    QPushButton * const btnDelete = ask.addButton(qt::mobile::Tr("Delete", "Löschen"), QMessageBox::ActionRole);
++    QPushButton * const btnCancel = ask.addButton(qt::mobile::Tr("Cancel", "Abbrechen"), QMessageBox::NoRole);
+     UNUSED_VALUE(btnCancel);
+ 
+     ask.exec();
+@@ -228,9 +230,9 @@ void UpdateDialog::OnItemClick(QTreeWidgetItem * item, int column)
+     // Map is already downloaded, so ask user about deleting.
+     QMessageBox ask(this);
+     ask.setIcon(QMessageBox::Question);
+-    ask.setText(tr("Do you want to delete %1?").arg(countryId.c_str()));
+-    QPushButton * const btnDelete = ask.addButton(tr("Delete"), QMessageBox::ActionRole);
+-    QPushButton * const btnCancel = ask.addButton(tr("Cancel"), QMessageBox::NoRole);
++    ask.setText(qt::mobile::Tr("Do you want to delete %1?", "%1 löschen?").arg(countryId.c_str()));
++    QPushButton * const btnDelete = ask.addButton(qt::mobile::Tr("Delete", "Löschen"), QMessageBox::ActionRole);
++    QPushButton * const btnCancel = ask.addButton(qt::mobile::Tr("Cancel", "Abbrechen"), QMessageBox::NoRole);
+     UNUSED_VALUE(btnCancel);
+ 
+     ask.exec();
+@@ -252,10 +254,10 @@ void UpdateDialog::OnItemClick(QTreeWidgetItem * item, int column)
+   {
+     QMessageBox ask(this);
+     ask.setIcon(QMessageBox::Question);
+-    ask.setText(tr("Do you want to download or delete %1?").arg(countryId.c_str()));
+-    QPushButton * const btnDownload = ask.addButton(tr("Download"), QMessageBox::ActionRole);
+-    QPushButton * const btnDelete = ask.addButton(tr("Delete"), QMessageBox::ActionRole);
+-    QPushButton * const btnCancel = ask.addButton(tr("Cancel"), QMessageBox::NoRole);
++    ask.setText(qt::mobile::Tr("Do you want to download or delete %1?", "%1 herunterladen oder löschen?").arg(countryId.c_str()));
++    QPushButton * const btnDownload = ask.addButton(qt::mobile::Tr("Download", "Herunterladen"), QMessageBox::ActionRole);
++    QPushButton * const btnDelete = ask.addButton(qt::mobile::Tr("Delete", "Löschen"), QMessageBox::ActionRole);
++    QPushButton * const btnCancel = ask.addButton(qt::mobile::Tr("Cancel", "Abbrechen"), QMessageBox::NoRole);
+     UNUSED_VALUE(btnCancel);
+ 
+     ask.exec();
+@@ -297,25 +299,25 @@ void UpdateDialog::OnCheckUpdatesClick()
+     switch (status)
+     {
+     case storage::CheckUpdatesStatus::Updated:
+-      txt = tr("Map updates available!");
++      txt = qt::mobile::Tr("Map updates available!", "Kartenupdates verfügbar!");
+       RefillTree();
+       break;
+-    case storage::CheckUpdatesStatus::NoUpdate: txt = tr("No updates available"); break;
++    case storage::CheckUpdatesStatus::NoUpdate: txt = qt::mobile::Tr("No updates available", "Keine Updates verfügbar"); break;
+     case storage::CheckUpdatesStatus::EOL:
+       txt = tr("No more map updates for this app version. Please update the app!");
+       break;
+     case storage::CheckUpdatesStatus::Error:
+-    default: txt = tr("Error checking for updates"); break;
++    default: txt = qt::mobile::Tr("Error checking for updates", "Fehler bei der Update-Prüfung"); break;
+     }
+     m_pCheckUpdatesLabel->setText(txt);
+ 
+-    m_pCheckUpdatesButton->setText(tr("Check for updates"));
++    m_pCheckUpdatesButton->setText(qt::mobile::Tr("Check for updates", "Auf Updates prüfen"));
+     m_pCheckUpdatesButton->setEnabled(true);
+   };
+   GetStorage().SetCheckUpdatesListener(callback);
+ 
+   m_pCheckUpdatesButton->setEnabled(false);
+-  m_pCheckUpdatesButton->setText(tr("Checking for updates..."));
++  m_pCheckUpdatesButton->setText(qt::mobile::Tr("Checking for updates...", "Suche nach Updates …"));
+   m_pCheckUpdatesLabel->setText("");
+   GetStorage().RunCountriesCheckAsyncSaveOnly();
+ }
+@@ -491,42 +493,42 @@ void UpdateDialog::UpdateRowWithCountryInfo(QTreeWidgetItem * item, CountryId co
+   {
+   case NodeStatus::NotDownloaded:
+     ASSERT(size.second > 0, (countryId));
+-    statusString = tr("Click to download");
++    statusString = qt::mobile::Tr("Download", "Laden");
+     rowColor = COLOR_NOTDOWNLOADED;
+     break;
+ 
+   case NodeStatus::OnDisk:
+-    statusString = tr("Installed (click to delete)");
++    statusString = qt::mobile::Tr("Installed", "Installiert");
+     rowColor = COLOR_ONDISK;
+     break;
+ 
+   case NodeStatus::Partly:
+-    statusString = tr("Partially installed (click to install or delete)");
++    statusString = qt::mobile::Tr("Partly", "Teilweise");
+     rowColor = COLOR_ONDISK;
+     break;
+ 
+   case NodeStatus::OnDiskOutOfDate:
+-    statusString = tr("Out of date (click to update or delete)");
++    statusString = qt::mobile::Tr("Outdated", "Veraltet");
+     rowColor = COLOR_OUTOFDATE;
+     break;
+ 
+   case NodeStatus::Error:
+-    statusString = tr("Download has failed");
++    statusString = qt::mobile::Tr("Failed", "Fehler");
+     rowColor = COLOR_DOWNLOADFAILED;
+     break;
+ 
+   case NodeStatus::Downloading:
+-    statusString = tr("Downloading... (click to cancel)");
++    statusString = qt::mobile::Tr("Loading…", "Lädt …");
+     rowColor = COLOR_INPROGRESS;
+     break;
+ 
+   case NodeStatus::Applying:
+-    statusString = tr("Applying ...");
++    statusString = qt::mobile::Tr("Applying…", "Wird angewendet …");
+     rowColor = COLOR_INPROGRESS;
+     break;
+ 
+   case NodeStatus::InQueue:
+-    statusString = tr("Marked for download (click to cancel)");
++    statusString = qt::mobile::Tr("Queued", "Wartet");
+     rowColor = COLOR_INQUEUE;
+     break;
+ 
 diff --git a/qt/ut_icons_data.hpp b/qt/ut_icons_data.hpp
 new file mode 100644
 index 0000000..663edbc
@@ -1069,10 +1265,10 @@ index 0000000..663edbc
 +}  // namespace ut_icons
 diff --git a/qt/ut_mobile_ui.cpp b/qt/ut_mobile_ui.cpp
 new file mode 100644
-index 0000000..068c69e
+index 0000000..b8162b2
 --- /dev/null
 +++ b/qt/ut_mobile_ui.cpp
-@@ -0,0 +1,1552 @@
+@@ -0,0 +1,1594 @@
 +#include "qt/ut_mobile_ui.hpp"
 +
 +#include "qt/draw_widget.hpp"
@@ -1090,6 +1286,8 @@ index 0000000..068c69e
 +#include "base/string_utils.hpp"
 +
 +#include <QtCore/QEvent>
++#include <QtCore/QPointer>
++#include <QtCore/QTimer>
 +#include <QtCore/QLocale>
 +#include <QtCore/QRegularExpression>
 +#include <QtGui/QGuiApplication>
@@ -1105,6 +1303,7 @@ index 0000000..068c69e
 +#include <QtWidgets/QFrame>
 +#include <QtWidgets/QHBoxLayout>
 +#include <QtWidgets/QLabel>
++#include <QtWidgets/QMessageBox>
 +#include <QtWidgets/QPushButton>
 +#include <QtWidgets/QScrollArea>
 +#include <QtWidgets/QScroller>
@@ -1713,6 +1912,8 @@ index 0000000..068c69e
 +  }
 +}
 +
++void ModeSelector::mousePressEvent(QMouseEvent * e) { e->accept(); }
++
 +void ModeSelector::mouseReleaseEvent(QMouseEvent * e)
 +{
 +  int const i = static_cast<int>((e->position().x() - 4) / kModeCell);
@@ -1877,6 +2078,37 @@ index 0000000..068c69e
 +
 +namespace
 +{
++// Full screen dialogs get a page header like the iPhone app: round back
++// button and the title (Lomiri shows no window titles).
++void AddPageHeader(QDialog * dlg)
++{
++  if (dlg->property("utHeader").toBool() || qobject_cast<QMessageBox *>(dlg))
++    return;
++  if (!(dlg->windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen)))
++    return;
++  auto * box = qobject_cast<QBoxLayout *>(dlg->layout());
++  if (!box)
++    return;
++  dlg->setProperty("utHeader", true);
++  Style const & st = CurrentStyle();
++  auto * header = new QWidget(dlg);
++  header->setObjectName("utPageHeader");
++  auto * h = new QHBoxLayout(header);
++  h->setContentsMargins(0, 14, 0, 6);
++  h->setSpacing(8);
++  auto * back = new RoundButton("back", 40, header);
++  back->setObjectName("utPageBack");
++  back->SetFlat(true);
++  QObject::connect(back, &QAbstractButton::clicked, dlg, &QDialog::reject);
++  h->addWidget(back);
++  QLabel * title = MakeLabel(dlg->windowTitle(), 19, st.text, true, header);
++  title->setObjectName("utPageTitle");
++  title->setAlignment(Qt::AlignCenter);
++  h->addWidget(title, 1);
++  h->addSpacing(40);
++  box->insertWidget(0, header);
++}
++
 +// Every dialog that is shown gets finger scrolling in its lists.
 +class DialogTouchFilter : public QObject
 +{
@@ -1890,6 +2122,12 @@ index 0000000..068c69e
 +    {
 +      if (auto * dlg = qobject_cast<QDialog *>(obj))
 +      {
++        QPointer<QDialog> pd(dlg);
++        QTimer::singleShot(0, dlg, [pd]
++        {
++          if (pd)
++            AddPageHeader(pd);
++        });
 +        for (auto * area : dlg->findChildren<QAbstractScrollArea *>())
 +        {
 +          EnableFingerScrolling(area->viewport());
@@ -2627,10 +2865,10 @@ index 0000000..068c69e
 +}  // namespace qt
 diff --git a/qt/ut_mobile_ui.hpp b/qt/ut_mobile_ui.hpp
 new file mode 100644
-index 0000000..63e7d82
+index 0000000..adc2c9c
 --- /dev/null
 +++ b/qt/ut_mobile_ui.hpp
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,240 @@
 +#pragma once
 +
 +// ut-comaps: phone user interface for the CoMaps Qt frontend, modelled on the
@@ -2763,6 +3001,7 @@ index 0000000..63e7d82
 +
 +protected:
 +  void paintEvent(QPaintEvent *) override;
++  void mousePressEvent(QMouseEvent * e) override;
 +  void mouseReleaseEvent(QMouseEvent * e) override;
 +
 +private:

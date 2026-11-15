@@ -15,6 +15,10 @@ export QT_PLUGIN_PATH="$HERE/lib/plugins"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland}"
 # Lomiri draws the window frame; Qt must not add its own decorations.
 export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+# libhybris loads the Android linker (q.so) at GL start; with the bundled libs
+# glibc's static TLS reserve is too small ("cannot allocate memory in static
+# TLS block", seen on UT 26.04 images). Enlarge it; harmless elsewhere.
+export GLIBC_TUNABLES="${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.optional_static_tls=4096000"
 
 # Scaling: Lomiri does NOT pass its scale to Qt6 over Wayland (measured on UT
 # 24.04: devicePixelRatio 1, CoMaps "Visual scale = 1"). It exports GRID_UNIT_PX
