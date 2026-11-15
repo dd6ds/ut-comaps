@@ -260,11 +260,16 @@ phone() {
 
     local name
     name="$(basename "$click")"
+    # Version from the click itself (name: ut-comaps_<version>_arm64.click).
+    local version="${name#ut-comaps_}"
+    version="${version%_*.click}"
+
     echo "build.sh: installing $name"
     adb push "$click" "/home/phablet/Downloads/$name" >/dev/null
+    # Note: "adb shell" on UT does not pass the exit code back, so decide by output.
     # Newer images (UT 26.04) have no pkcon; then click install with sudo,
     # which asks for the phone's password here in the terminal.
-    if adb shell 'command -v pkcon >/dev/null'; then
+    if [[ -n "$(adb shell 'command -v pkcon' | tr -d '\r')" ]]; then
         adb shell "pkcon install-local --allow-untrusted -y '/home/phablet/Downloads/$name'"
     else
         echo "build.sh: the phone asks for its password (sudo click install):"
@@ -272,12 +277,15 @@ phone() {
     fi
     adb shell "rm -f '/home/phablet/Downloads/$name'"
 
-    # Start it: app id = <package>_<app>_<version>
-    local version="${name#ut-comaps_}"
-    version="${version%_*.click}"
-    adb shell "lomiri-app-launch ut-comaps_ut-comaps_$version >/dev/null 2>&1 \
-               || ubuntu-app-launch ut-comaps_ut-comaps_$version >/dev/null 2>&1" || true
-    echo "build.sh: done ($version)"
+    local installed
+    installed="$(adb shell "click list" | tr -d '\r' | awk '$1 == "ut-comaps" {print $2}')"
+    [[ "$installed" == "$version" ]] \
+        || die "installation failed (installed version: ${installed:-none})"
+
+    # Start it in the phone's session (app id = <package>_<app>_<version>).
+    adb shell "export XDG_RUNTIME_DIR=/run/user/\$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/\$(id -u)/bus;
+               lomiri-app-launch ut-comaps_ut-comaps_$version" >/dev/null 2>&1 || true
+    echo "build.sh: installed and started ut-comaps $version"
 }
 
 main() {
