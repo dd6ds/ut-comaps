@@ -49,6 +49,33 @@ ergänzt es für Ubuntu Touch (neue Datei `qt/ut_integration.{hpp,cpp}`):
 
 Beide Einstellungen liegen in `settings.ini` im Datenordner (`~/.local/share/ut-comaps/`).
 
+### Handy-Oberfläche im Stil der iPhone-App (`patches/0006-ut-mobile-ui-ios-style.patch`)
+
+Die Desktop-Werkzeugleiste und das Menü passen nicht auf ein Handy. Stattdessen liegt die Karte
+bildschirmfüllend unter runden, schwebenden Bedienelementen – wie in der CoMaps-App fürs iPhone:
+
+- oben: Menü (⋯), Verkehrsmittel (zu Fuß, Rad, Auto, ÖPNV), Kartenebenen (Outdoor, Höhenlinien,
+  3D-Gebäude, ÖPNV-Linien)
+- unten: Lesezeichen (★), Suchfeld „Suche“, Mein Standort
+- Suche als eigene Seite mit Kategorien, Treffern (Name, Typ, Adresse, Entfernung) und „Abbrechen“
+- Ortsdetails als Blatt von unten (Einwohner, Adresse, Öffnungszeiten, Telefon, Web, Koordinaten)
+  mit „Route von“, „Speichern“, „Route nach“, „Bearbeiten“
+- Routen-Zusammenfassung („35 min • 35 km“) mit „Start“, Download-Banner für die sichtbare Region
+- Vollbild-Dialoge (Karten herunterladen, Lesezeichen, Einstellungen …) bekommen eine Kopfzeile mit
+  rundem Zurück-Knopf und Titel; Listen scrollen mit dem Finger
+
+Die Texte folgen der Sprache (Deutsch/Englisch), die Farben dem hellen/dunklen Erscheinungsbild.
+Die Bedienelemente sind Geschwister des Karten-Widgets (nicht Kinder): die Karte nimmt Touch-Ereignisse
+selbst an und würde sonst alle Berührungen schlucken.
+
+`patches/0007-…` macht Downloads robuster (30-s-Timeout, falls ein Spiegelserver nicht antwortet)
+und übersetzt Ortstypen („Großstadt“ statt „City“) mit den Texten der iPhone-App.
+
+**UI-Tests über adb:** Mit gesetzter Umgebungsvariable `UT_COMAPS_TEST=<datei>` führt die App
+Befehle aus, die in diese Datei geschrieben werden (`click <objectName>`, `clicktext <text>`,
+`tap <x> <y>`, `type <text>`, `back`, `dump`, `center <lat> <lon> <zoom>` …), Ausgaben landen in
+`<datei>.out`. Ohne die Variable ist nichts davon aktiv.
+
 Die Patches sind gegen einen festen CoMaps-Commit erstellt (`COMAPS_REF` in
 `scripts/fetch-source.sh`). `scripts/apply-patches.sh` wendet sie beim Bauen an und überspringt
 bereits angewendete Patches.
