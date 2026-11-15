@@ -19,6 +19,13 @@ export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
 # glibc's static TLS reserve is too small ("cannot allocate memory in static
 # TLS block", seen on UT 26.04 images). Enlarge it; harmless elsewhere.
 export GLIBC_TUNABLES="${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.rtld.optional_static_tls=4096000"
+# On-screen keyboard: the bundled Maliit plugin asks D-Bus for the server
+# address, but under Qt 6 that reply never reaches it ("cannot deliver a reply
+# to ...DynamicAddress::successCallback") - no keyboard. Maliit takes a fixed
+# address from the environment instead; the server socket has a known place.
+if [ -z "${MALIIT_SERVER_ADDRESS:-}" ] && [ -S "${XDG_RUNTIME_DIR:-/nonexistent}/maliit-server" ]; then
+    export MALIIT_SERVER_ADDRESS="unix:path=$XDG_RUNTIME_DIR/maliit-server"
+fi
 
 # Scaling: Lomiri does NOT pass its scale to Qt6 over Wayland (measured on UT
 # 24.04: devicePixelRatio 1, CoMaps "Visual scale = 1"). It exports GRID_UNIT_PX
