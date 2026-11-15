@@ -39,6 +39,15 @@ rsync -a --delete \
     $(for e in ${EXCLUDES//:/ }; do echo "--exclude=$e"; done) \
     "$SRC/data/" "$CLICK_DIR/data/"
 
+# Translated place types ("Großstadt" instead of "City") for search results and
+# the place page: the iPhone app's strings, read by GetLocalizedTypeName.
+mkdir -p "$CLICK_DIR/data/ut-types"
+for f in "$SRC"/iphone/Maps/LocalizedStrings/*.lproj/LocalizableTypes.strings; do
+    [ -f "$f" ] || continue
+    lang="$(basename "$(dirname "$f")" .lproj)"
+    cp "$f" "$CLICK_DIR/data/ut-types/$lang.strings"
+done
+
 # --- Qt plugins --------------------------------------------------------------
 PLUGINS=""
 for d in /usr/lib/aarch64-linux-gnu/qt6/plugins /usr/lib/qt6/plugins; do
@@ -96,6 +105,20 @@ copy_libs() {
 echo "[ut-comaps] Bundling shared libraries ..."
 mapfile -t PLUGIN_SOS < <(find "$CLICK_DIR/lib/plugins" -name '*.so')
 copy_libs "$CLICK_DIR/comaps.bin" "${PLUGIN_SOS[@]}"
+# Qt's OpenSSL TLS backend dlopen()s libssl, so ldd does not list it, while
+# libcrypto gets bundled through other libraries. The phone's own libssl then
+# meets our libcrypto - a mismatch on newer images (UT 26.04: OpenSSL 3.5),
+# which ends in "TLS initialization failed" and no map downloads. Bundle the
+# libssl that matches the bundled libcrypto.
+for so in libssl.so.3; do
+    p="$(ldconfig -p | awk -v n="$so" '$1 == n {print $NF}' | head -n 1)" || true
+    if [ -n "$p" ]; then
+        cp -Ln "$p" "$CLICK_DIR/lib/"
+        copy_libs "$CLICK_DIR/lib/$so"
+    else
+        echo "[ut-comaps] WARNING: $so not found, TLS may fail on the phone." >&2
+    fi
+done
 echo "[ut-comaps] Bundled $(ls "$CLICK_DIR/lib" | grep -c '\.so') libraries."
 
 # --- Build the click (clickable does this itself) -----------------------------

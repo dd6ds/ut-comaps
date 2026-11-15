@@ -1,0 +1,81 @@
+diff --git a/libs/platform/http_thread_qt.cpp b/libs/platform/http_thread_qt.cpp
+index dc34228..c2aac49 100644
+--- a/libs/platform/http_thread_qt.cpp
++++ b/libs/platform/http_thread_qt.cpp
+@@ -19,6 +19,9 @@ HttpThread::HttpThread(std::string const & url, downloader::IHttpThreadCallback
+ {
+   QUrl const qUrl(url.c_str());
+   QNetworkRequest request(qUrl);
++  // ut-comaps: a mirror that accepts the connection but never answers would
++  // block the downloader forever; time out so the next server is tried.
++  request.setTransferTimeout(30000);
+ 
+   // use Range header only if we don't download whole file from start
+   if (!(beg == 0 && end < 0))
+diff --git a/libs/platform/localization_dummy.cpp b/libs/platform/localization_dummy.cpp
+index 8d4277f..32d633a 100644
+--- a/libs/platform/localization_dummy.cpp
++++ b/libs/platform/localization_dummy.cpp
+@@ -1,14 +1,62 @@
+ #include <ctime>
+ #include "platform/localized_types_map.cpp"
+ #include "platform/localization.hpp"
++#include "platform/platform.hpp"
++#include "platform/preferred_languages.hpp"
++
++#include <fstream>
++#include <mutex>
+ 
+ namespace platform
+ {
++namespace
++{
++// ut-comaps: translated type names. The click ships the iPhone app's
++// LocalizableTypes.strings as data/ut-types/<lang>.strings; lines look like
++//   "type.place.city" = "Großstadt";
++Type2LocalizedType const & UtTranslatedTypes()
++{
++  static Type2LocalizedType types;
++  static std::once_flag once;
++  std::call_once(once, []
++  {
++    std::string const lang = languages::GetCurrentNorm();
++    std::string const dir = GetPlatform().ResourcesDir() + "ut-types/";
++    for (std::string const & l : {lang, lang.substr(0, lang.find('-'))})
++    {
++      std::ifstream in(dir + l + ".strings");
++      if (!in)
++        continue;
++      std::string line;
++      while (std::getline(in, line))
++      {
++        auto const k0 = line.find('"');
++        auto const k1 = k0 == std::string::npos ? k0 : line.find('"', k0 + 1);
++        auto const eq = k1 == std::string::npos ? k1 : line.find('=', k1);
++        auto const v0 = eq == std::string::npos ? eq : line.find('"', eq);
++        auto const v1 = line.rfind('"');
++        if (v0 == std::string::npos || v1 == std::string::npos || v1 <= v0)
++          continue;
++        std::string value = line.substr(v0 + 1, v1 - v0 - 1);
++        for (size_t p = value.find("\\\""); p != std::string::npos; p = value.find("\\\"", p))
++          value.erase(p, 1);
++        types.emplace(line.substr(k0 + 1, k1 - k0 - 1), std::move(value));
++      }
++      break;
++    }
++  });
++  return types;
++}
++}  // namespace
++
+ std::string GetLocalizedTypeName(std::string const & type)
+ {
+   auto key = "type." + type;
+   std::replace(key.begin(), key.end(), '-', '.');
+   std::replace(key.begin(), key.end(), ':', '_');
++  auto const & translated = UtTranslatedTypes();
++  if (auto const it = translated.find(key); it != translated.end() && !it->second.empty())
++    return it->second;
+   auto const it = g_type2localizedType.find(key);
+   std::string localizedName = (it != g_type2localizedType.end()) ? it->second : std::string();
+   return localizedName.empty() ? type : localizedName;

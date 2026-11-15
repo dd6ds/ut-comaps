@@ -25,10 +25,10 @@ index 220ed5e..f6a3f9a 100644
  
  if (BUILD_DESIGNER)
 diff --git a/qt/draw_widget.cpp b/qt/draw_widget.cpp
-index 1bb44ea..1270061 100644
+index 1bb44ea..ec0e78d 100644
 --- a/qt/draw_widget.cpp
 +++ b/qt/draw_widget.cpp
-@@ -8,6 +8,7 @@
+@@ -8,9 +8,12 @@
  #include "qt/qt_common/helpers.hpp"
  #include "qt/routing_settings_dialog.hpp"
  #include "qt/screenshoter.hpp"
@@ -36,7 +36,12 @@ index 1bb44ea..1270061 100644
  
  #include "generator/borders.hpp"
  
-@@ -101,8 +102,18 @@ DrawWidget::DrawWidget(Framework & framework, std::unique_ptr<ScreenshotParams>
++#include "drape_frontend/gui/skin.hpp"
++
+ #include "map/framework.hpp"
+ 
+ #include "search/result.hpp"
+@@ -101,8 +104,18 @@ DrawWidget::DrawWidget(Framework & framework, std::unique_ptr<ScreenshotParams>
  {
    setFocusPolicy(Qt::StrongFocus);
  
@@ -57,7 +62,7 @@ index 1bb44ea..1270061 100644
  
    auto & routingManager = m_framework.GetRoutingManager();
  
-@@ -669,6 +680,12 @@ void DrawWidget::ShowPlacePage()
+@@ -669,6 +682,12 @@ void DrawWidget::ShowPlacePage()
      address = m_framework.GetAddressAtPoint(info.GetMercator());
    }
  
@@ -70,7 +75,7 @@ index 1bb44ea..1270061 100644
    std::unique_ptr<QDialog> placePageDialog = nullptr;
    bool developerMode;
    if (settings::Get(settings::kDeveloperMode, developerMode) && developerMode)
-@@ -776,11 +793,11 @@ QString RouterName(routing::RouterType type)
+@@ -776,11 +795,11 @@ QString RouterName(routing::RouterType type)
  {
    switch (type)
    {
@@ -87,7 +92,7 @@ index 1bb44ea..1270061 100644
    default: return {};
    }
  }
-@@ -788,25 +805,17 @@ QString RouterName(routing::RouterType type)
+@@ -788,25 +807,17 @@ QString RouterName(routing::RouterType type)
  
  void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
  {
@@ -118,7 +123,7 @@ index 1bb44ea..1270061 100644
    }
    else
    {
-@@ -823,11 +832,14 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
+@@ -823,11 +834,14 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
        return;
      }
      auto const routerType = routing::GetLastUsedRouter();
@@ -135,7 +140,7 @@ index 1bb44ea..1270061 100644
  
      if (routerType == routing::RouterType::Pedestrian || routerType == routing::RouterType::Bicycle)
      {
-@@ -837,11 +849,30 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
+@@ -837,11 +851,30 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
          da.Simplify();
          uint32_t ascent = 0, descent = 0;
          da.CalculateAscentDescent(ascent, descent);
@@ -167,7 +172,7 @@ index 1bb44ea..1270061 100644
    m_routeInfo->setText(text);
    PlaceRouteInfo();
    m_routeInfo->show();
-@@ -850,10 +881,84 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
+@@ -850,10 +883,84 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
  
  void DrawWidget::HideRouteInfo()
  {
@@ -252,8 +257,34 @@ index 1bb44ea..1270061 100644
  void DrawWidget::PlaceRouteInfo()
  {
    if (!m_routeInfo)
+@@ -865,6 +972,25 @@ void DrawWidget::PlaceRouteInfo()
+   m_routeInfo->move((width() - m_routeInfo->width()) / 2, margin);
+ }
+ 
++void DrawWidget::resizeGL(int width, int height)
++{
++  TBase::resizeGL(width, height);
++  // ut-comaps phone UI: scale bar and copyright above the bottom buttons,
++  // compass below the layers button (like the iPhone app).
++  if (!m_mobile.showPlace || !m_skin || m_screenshotMode)
++    return;
++  double const r = m_ratio;
++  gui::TWidgetsLayoutInfo layout;
++  m_skin->ForEach([&layout](gui::EWidget w, gui::Position const & pos) { layout[w] = pos.m_pixelPivot; });
++  double const lift = (22 + 52 + 10) * r;
++  for (auto const w : {gui::WIDGET_RULER, gui::WIDGET_COPYRIGHT})
++    if (auto it = layout.find(w); it != layout.end())
++      it->second.y -= lift;
++  if (auto it = layout.find(gui::WIDGET_COMPASS); it != layout.end())
++    it->second = m2::PointD((width - 12 - 26) * r, (30 + 52 + 10 + 24) * r);
++  m_framework.SetWidgetLayout(std::move(layout));
++}
++
+ void DrawWidget::resizeEvent(QResizeEvent * e)
+ {
+   TBase::resizeEvent(e);
 diff --git a/qt/draw_widget.hpp b/qt/draw_widget.hpp
-index 1d4c24a..ea66fc9 100644
+index 1d4c24a..70df2a8 100644
 --- a/qt/draw_widget.hpp
 +++ b/qt/draw_widget.hpp
 @@ -5,9 +5,11 @@
@@ -299,7 +330,15 @@ index 1d4c24a..ea66fc9 100644
  protected:
    /// @name Overriden from MapWidget.
    //@{
-@@ -95,6 +114,8 @@ private:
+@@ -88,6 +107,7 @@ protected:
+   void keyPressEvent(QKeyEvent * e) override;
+   void keyReleaseEvent(QKeyEvent * e) override;
+   void resizeEvent(QResizeEvent * e) override;
++  void resizeGL(int width, int height) override;
+ 
+ private:
+   // Ubuntu Touch: route summary (distance, time, ascent) shown over the map.
+@@ -95,6 +115,8 @@ private:
    void HideRouteInfo();
    void PlaceRouteInfo();
    QLabel * m_routeInfo = nullptr;
@@ -309,7 +348,7 @@ index 1d4c24a..ea66fc9 100644
    void SubmitFakeLocationPoint(m2::PointD const & pt);
    void SubmitRulerPoint(m2::PointD const & pt);
 diff --git a/qt/mainwindow.cpp b/qt/mainwindow.cpp
-index 9aaf07c..5120c5c 100644
+index 9aaf07c..3c2da11 100644
 --- a/qt/mainwindow.cpp
 +++ b/qt/mainwindow.cpp
 @@ -11,6 +11,10 @@
@@ -389,7 +428,7 @@ index 9aaf07c..5120c5c 100644
 +    {
 +      QString const name = QString::fromStdString(GetFramework().GetStorage().GetNodeLocalName(countryId));
 +      m_mobileUi->SetCountryState(mobile::MapUi::CountryState::Downloading,
-+                                  mobile::Tr("%1: %2% (tap to cancel)", "%1: %2 % (Tippen zum Abbrechen)")
++                                  mobile::Tr("%1: %2%", "%1: %2 %")
 +                                      .arg(name)
 +                                      .arg(progress.m_bytesDownloaded * 100 / progress.m_bytesTotal));
 +    }
@@ -502,7 +541,7 @@ index 9aaf07c..5120c5c 100644
 +  else if (m_cancelDownloadButton->isVisibleTo(this))
 +  {
 +    state = State::Downloading;
-+    text = mobile::Tr("Downloading %1 … (tap to cancel)", "%1 wird geladen … (Tippen zum Abbrechen)").arg(name);
++    text = mobile::Tr("Downloading %1 …", "%1 wird geladen …").arg(name);
 +  }
 +  else if (m_retryButton->isVisibleTo(this))
 +  {
@@ -561,7 +600,7 @@ index 0aae592..c2da6f2 100644
    void SetMapMode(MapMode mapMode);
  
 diff --git a/qt/search_panel.cpp b/qt/search_panel.cpp
-index 8e08b5e..f527675 100644
+index 8e08b5e..b5b4476 100644
 --- a/qt/search_panel.cpp
 +++ b/qt/search_panel.cpp
 @@ -1,5 +1,6 @@
@@ -571,7 +610,7 @@ index 8e08b5e..f527675 100644
  
  #include "search/search_params.hpp"
  
-@@ -12,99 +13,232 @@
+@@ -12,99 +13,248 @@
  
  #include <QtCore/QTimer>
  #include <QtGui/QGuiApplication>
@@ -595,7 +634,12 @@ index 8e08b5e..f527675 100644
 +{
 +using mobile::CurrentStyle;
 +using mobile::Tr;
-+
+ 
+-constexpr int kColType = 0;
+-constexpr int kColName = 1;
+-constexpr int kColAddress = 2;
+-constexpr int kColDistance = 3;
+-constexpr int kColCount = 4;
 +// Category shortcuts shown while the search field is empty: (English, German).
 +struct Category
 +{
@@ -654,12 +698,14 @@ index 8e08b5e..f527675 100644
 +  }
 +  return row;
 +}
- 
--constexpr int kColType = 0;
--constexpr int kColName = 1;
--constexpr int kColAddress = 2;
--constexpr int kColDistance = 3;
--constexpr int kColCount = 4;
++
++// Row height for the list's width (wrapped labels).
++int RowHeight(QWidget * row, int width, int minimum)
++{
++  int const h = row->hasHeightForWidth() ? row->heightForWidth(width) : row->sizeHint().height();
++  return std::max(h, minimum);
++}
++
 +QIcon ClearIcon()
 +{
 +  auto const & st = CurrentStyle();
@@ -816,18 +862,27 @@ index 8e08b5e..f527675 100644
  }
  
 -namespace
-+void SearchPanel::FocusInput()
++int SearchPanel::ListWidth() const
  {
 -QTableWidgetItem * CreateItem(std::string const & s)
++  int const w = m_pList->viewport()->width();
++  if (w > 100)
++    return w;
++  QWidget const * top = window();
++  return top ? top->width() : 400;
++}
++
++void SearchPanel::FocusInput()
+ {
+-  QTableWidgetItem * item = new QTableWidgetItem(QString::fromStdString(s));
+-  item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+-  return item;
 +  m_pEditor->setFocus(Qt::OtherFocusReason);
 +  QGuiApplication::inputMethod()->show();
 +}
 +
 +void SearchPanel::ShowCategories()
- {
--  QTableWidgetItem * item = new QTableWidgetItem(QString::fromStdString(s));
--  item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
--  return item;
++{
 +  ClearTable();
 +  m_showingCategories = true;
 +  auto * header = new QListWidgetItem(m_pList);
@@ -846,7 +901,7 @@ index 8e08b5e..f527675 100644
 +    QString const name = Tr(c.en, c.de);
 +    item->setData(Qt::UserRole, name);
 +    QWidget * row = MakeRow(c.icon, name.toHtmlEscaped(), {}, {}, {}, false);
-+    item->setSizeHint(QSize(100, std::max(row->sizeHint().height(), 50)));
++    item->setSizeHint(QSize(100, RowHeight(row, ListWidth(), 50)));
 +    m_pList->setItemWidget(item, row);
 +  }
  }
@@ -861,7 +916,7 @@ index 8e08b5e..f527675 100644
  }
  
  void SearchPanel::ClearResults()
-@@ -119,7 +253,6 @@ void SearchPanel::StartBusyIndicator()
+@@ -119,7 +269,6 @@ void SearchPanel::StartBusyIndicator()
    if (!m_pAnimationTimer->isActive())
      m_pAnimationTimer->start(200 /* milliseconds */);
  
@@ -869,7 +924,7 @@ index 8e08b5e..f527675 100644
    m_pClearButton->setVisible(true);
  }
  
-@@ -140,6 +273,7 @@ void SearchPanel::OnSearchResults(uint64_t timestamp, search::Results results)
+@@ -140,6 +289,7 @@ void SearchPanel::OnSearchResults(uint64_t timestamp, search::Results results)
    m_results = std::move(results);
    ClearTable();
  
@@ -877,7 +932,7 @@ index 8e08b5e..f527675 100644
    for (auto const & res : m_results)
    {
      QString const name = QString::fromStdString(res.GetString());
-@@ -148,34 +282,37 @@ void SearchPanel::OnSearchResults(uint64_t timestamp, search::Results results)
+@@ -148,34 +298,37 @@ void SearchPanel::OnSearchResults(uint64_t timestamp, search::Results results)
      for (size_t r = 0; r < res.GetHighlightRangesCount(); ++r)
      {
        std::pair<uint16_t, uint16_t> const & range = res.GetHighlightRange(r);
@@ -928,12 +983,12 @@ index 8e08b5e..f527675 100644
 -      m_pTable->setItem(rowCount, kColDistance, CreateItem(m_pDrawWidget->GetDistance(res)));
 +    auto * item = new QListWidgetItem(m_pList);
 +    QWidget * row = MakeRow(suggestion ? "search" : "circle", strHigh, type, address, distance, !suggestion);
-+    item->setSizeHint(QSize(100, std::max(row->sizeHint().height(), suggestion ? 50 : 64)));
++    item->setSizeHint(QSize(100, RowHeight(row, ListWidth(), suggestion ? 50 : 64)));
 +    m_pList->setItemWidget(item, row);
    }
  
    GetFramework().FillSearchResultsMarks(true /* clear */, m_results);
-@@ -248,6 +385,8 @@ void SearchPanel::OnSearchTextChanged(QString const & str)
+@@ -248,6 +401,8 @@ void SearchPanel::OnSearchTextChanged(QString const & str)
  
      // hide X button
      m_pClearButton->setVisible(false);
@@ -942,7 +997,7 @@ index 8e08b5e..f527675 100644
      return;
    }
  
-@@ -309,9 +448,25 @@ void SearchPanel::RunSearch()
+@@ -309,9 +464,25 @@ void SearchPanel::RunSearch()
    m_pEditor->setText(text);
  }
  
@@ -970,7 +1025,7 @@ index 8e08b5e..f527675 100644
  
    if (m_results[row].IsSuggest())
    {
-@@ -323,6 +478,7 @@ void SearchPanel::OnSearchPanelItemClicked(int row, int)
+@@ -323,6 +494,7 @@ void SearchPanel::OnSearchPanelItemClicked(int row, int)
    {
      // center viewport on clicked item
      GetFramework().ShowSearchResult(m_results[row]);
@@ -979,7 +1034,7 @@ index 8e08b5e..f527675 100644
  }
  
 diff --git a/qt/search_panel.hpp b/qt/search_panel.hpp
-index 70355ac..3e40b3d 100644
+index 70355ac..8f7467e 100644
 --- a/qt/search_panel.hpp
 +++ b/qt/search_panel.hpp
 @@ -11,8 +11,9 @@
@@ -1016,7 +1071,7 @@ index 70355ac..3e40b3d 100644
  
    search::Mode m_mode;
    uint64_t m_timestamp;
-@@ -47,19 +52,26 @@ public:
+@@ -47,19 +52,27 @@ public:
  
    static std::string GetCurrentInputLocale();
  
@@ -1033,6 +1088,7 @@ index 70355ac..3e40b3d 100644
    void ClearTable();
    void ClearResults();
 +  void ShowCategories();
++  int ListWidth() const;
  
    void StartBusyIndicator();
    void StopBusyIndicator();
@@ -1045,7 +1101,7 @@ index 70355ac..3e40b3d 100644
    void OnSearchResults(uint64_t timestamp, search::Results results);
  
 diff --git a/qt/update_dialog.cpp b/qt/update_dialog.cpp
-index 2592356..eb5d315 100644
+index 2592356..0dff526 100644
 --- a/qt/update_dialog.cpp
 +++ b/qt/update_dialog.cpp
 @@ -1,4 +1,5 @@
@@ -1093,7 +1149,7 @@ index 2592356..eb5d315 100644
    m_tree->setColumnCount(KNumberOfColumns);
    QStringList columnLabels;
 -  columnLabels << tr("Country") << tr("Status") << tr("Size") << tr("Matched by") << tr("Rank");
-+  columnLabels << qt::mobile::Tr("Region", "Region") << qt::mobile::Tr("Status", "Status") << qt::mobile::Tr("Size", "Größe") << tr("Matched by") << tr("Rank");
++  columnLabels << qt::mobile::Tr("Region", "Region") << QString() << qt::mobile::Tr("Size", "Größe") << tr("Matched by") << tr("Rank");
    m_tree->setHeaderLabels(columnLabels);
  
    m_tree->setColumnHidden(KColumnIndexPositionInRanking, true);
@@ -1194,37 +1250,37 @@ index 2592356..eb5d315 100644
    case NodeStatus::NotDownloaded:
      ASSERT(size.second > 0, (countryId));
 -    statusString = tr("Click to download");
-+    statusString = qt::mobile::Tr("Download", "Laden");
++    statusString = QString::fromUtf8("\u2193");
      rowColor = COLOR_NOTDOWNLOADED;
      break;
  
    case NodeStatus::OnDisk:
 -    statusString = tr("Installed (click to delete)");
-+    statusString = qt::mobile::Tr("Installed", "Installiert");
++    statusString = QString::fromUtf8("\u2713");
      rowColor = COLOR_ONDISK;
      break;
  
    case NodeStatus::Partly:
 -    statusString = tr("Partially installed (click to install or delete)");
-+    statusString = qt::mobile::Tr("Partly", "Teilweise");
++    statusString = QString::fromUtf8("\u25D0");
      rowColor = COLOR_ONDISK;
      break;
  
    case NodeStatus::OnDiskOutOfDate:
 -    statusString = tr("Out of date (click to update or delete)");
-+    statusString = qt::mobile::Tr("Outdated", "Veraltet");
++    statusString = qt::mobile::Tr("Update", "Update");
      rowColor = COLOR_OUTOFDATE;
      break;
  
    case NodeStatus::Error:
 -    statusString = tr("Download has failed");
-+    statusString = qt::mobile::Tr("Failed", "Fehler");
++    statusString = QString::fromUtf8("!");
      rowColor = COLOR_DOWNLOADFAILED;
      break;
  
    case NodeStatus::Downloading:
 -    statusString = tr("Downloading... (click to cancel)");
-+    statusString = qt::mobile::Tr("Loading…", "Lädt …");
++    statusString = QString::fromUtf8("\u2026");
      rowColor = COLOR_INPROGRESS;
      break;
  
@@ -1236,7 +1292,7 @@ index 2592356..eb5d315 100644
  
    case NodeStatus::InQueue:
 -    statusString = tr("Marked for download (click to cancel)");
-+    statusString = qt::mobile::Tr("Queued", "Wartet");
++    statusString = QString::fromUtf8("\u2026");
      rowColor = COLOR_INQUEUE;
      break;
  
@@ -1265,10 +1321,10 @@ index 0000000..663edbc
 +}  // namespace ut_icons
 diff --git a/qt/ut_mobile_ui.cpp b/qt/ut_mobile_ui.cpp
 new file mode 100644
-index 0000000..b8162b2
+index 0000000..abc1af8
 --- /dev/null
 +++ b/qt/ut_mobile_ui.cpp
-@@ -0,0 +1,1594 @@
+@@ -0,0 +1,1661 @@
 +#include "qt/ut_mobile_ui.hpp"
 +
 +#include "qt/draw_widget.hpp"
@@ -1285,12 +1341,16 @@ index 0000000..b8162b2
 +
 +#include "base/string_utils.hpp"
 +
++#include <QtCore/QCoreApplication>
++#include <QtCore/QDir>
 +#include <QtCore/QEvent>
++#include <QtCore/QFileInfo>
 +#include <QtCore/QPointer>
 +#include <QtCore/QTimer>
 +#include <QtCore/QLocale>
 +#include <QtCore/QRegularExpression>
 +#include <QtGui/QGuiApplication>
++#include <QtGui/QImage>
 +#include <QtGui/QInputMethod>
 +#include <QtGui/QMouseEvent>
 +#include <QtGui/QPainter>
@@ -2031,16 +2091,54 @@ index 0000000..b8162b2
 +
 +// --- Dialog styling ----------------------------------------------------------------
 +
++namespace
++{
++// Small images for the stylesheet (it can only reference files).
++QString UiImage(QString const & name, std::function<void(QPainter &)> const & paint)
++{
++  static QString const dir = QDir::tempPath() + QString("/ut-comaps-ui-%1/").arg(QCoreApplication::applicationPid());
++  QDir().mkpath(dir);
++  QString const path = dir + name + ".png";
++  if (!QFileInfo::exists(path))
++  {
++    QImage img(48, 48, QImage::Format_ARGB32_Premultiplied);
++    img.fill(Qt::transparent);
++    QPainter p(&img);
++    p.setRenderHint(QPainter::Antialiasing);
++    paint(p);
++    p.end();
++    img.save(path);
++  }
++  return path;
++}
++}  // namespace
++
 +QString DialogStyleSheet()
 +{
 +  Style const & st = CurrentStyle();
 +  QColor bg = st.panel;
 +  bg.setAlpha(255);
-+  return QString(
++  QString const check = UiImage("check", [](QPainter & p) { PaintIcon(p, "check", QRectF(8, 8, 32, 32), Qt::white); });
++  QString const extra =
++      QString("QDialog QCheckBox::indicator, QDialog QRadioButton::indicator { width: 22px; height: 22px; }"
++              "QDialog QCheckBox::indicator { border: 2px solid %1; border-radius: 6px; background: transparent; }"
++              "QDialog QCheckBox::indicator:checked { border-color: %2; background: %2; image: url(%3); }"
++              "QDialog QRadioButton::indicator { border: 2px solid %1; border-radius: 11px; background: transparent; }"
++              "QDialog QRadioButton::indicator:checked { border: 7px solid %2; background: white; }"
++              "QDialog QCheckBox, QDialog QRadioButton { spacing: 10px; min-height: 30px; font-size: 16px; }"
++              "QDialog QSlider::groove:horizontal { height: 4px; background: %4; border-radius: 2px; }"
++              "QDialog QSlider::sub-page:horizontal { background: %2; border-radius: 2px; }"
++              "QDialog QSlider::handle:horizontal { width: 26px; height: 26px; margin: -11px 0; border-radius: 13px;"
++              "  background: white; }"
++              "QDialog QGroupBox { border: none; margin-top: 18px; padding-top: 4px; font-size: 13px; }"
++              "QDialog QGroupBox::title { subcontrol-origin: margin; left: 2px; color: %1; }"
++              "QDialog QComboBox QAbstractItemView { background: %5; color: %6; selection-background-color: %4; }")
++          .arg(Hex(st.secondary), Hex(st.accent), check, Hex(st.field), Hex(bg), Hex(st.text));
++  return extra + QString(
 +             "QDialog { background: %1; }"
 +             "QDialog QLabel, QDialog QCheckBox, QDialog QRadioButton, QDialog QGroupBox { color: %2; }"
 +             "QDialog QPushButton { background: %3; color: %2; border: none; border-radius: 12px;"
-+             "  padding: 10px 16px; min-height: 22px; font-size: 16px; }"
++             "  padding: 10px 12px; min-height: 22px; font-size: 15px; }"
 +             "QDialog QPushButton:pressed { background: %4; }"
 +             "QDialog QPushButton:disabled { color: %5; }"
 +             "QDialog QPushButton:default { background: %6; color: white; font-weight: bold; }"
@@ -2099,7 +2197,26 @@ index 0000000..b8162b2
 +  auto * back = new RoundButton("back", 40, header);
 +  back->setObjectName("utPageBack");
 +  back->SetFlat(true);
-+  QObject::connect(back, &QAbstractButton::clicked, dlg, &QDialog::reject);
++  // A "Close" button is redundant next to the back button: hide it, but let
++  // back trigger it (some dialogs save on close).
++  QPointer<QAbstractButton> closeButton;
++  for (auto * b : dlg->findChildren<QPushButton *>())
++  {
++    QString const t = b->text().remove('&').trimmed();
++    if (t == "Close" || t == QString::fromUtf8("Schließen"))
++    {
++      closeButton = b;
++      b->hide();
++      break;
++    }
++  }
++  QObject::connect(back, &QAbstractButton::clicked, dlg, [dlg, closeButton]
++  {
++    if (closeButton)
++      closeButton->click();
++    else
++      dlg->reject();
++  });
 +  h->addWidget(back);
 +  QLabel * title = MakeLabel(dlg->windowTitle(), 19, st.text, true, header);
 +  title->setObjectName("utPageTitle");
@@ -2316,7 +2433,7 @@ index 0000000..b8162b2
 +      [this] { if (m_actions.showDownloader) m_actions.showDownloader(); });
 +  add("utMenuBookmarks", "list", Tr("Bookmarks and tracks", "Lesezeichen und Tracks"),
 +      [this] { if (m_actions.showBookmarks) m_actions.showBookmarks(); });
-+  add("utMenuRoutingSettings", "route_to", Tr("Routing options", "Routenoptionen"),
++  add("utMenuRoutingSettings", "track", Tr("Routing options", "Routenoptionen"),
 +      [this] { if (m_actions.showRoutingSettings) m_actions.showRoutingSettings(); });
 +  m_rulerRow = new RowButton("ruler", Tr("Ruler", "Lineal"), m_menuCard);
 +  m_rulerRow->setObjectName("utMenuRuler");
@@ -2672,7 +2789,6 @@ index 0000000..b8162b2
 +    ms::LatLon const ll = info.GetLatLon();
 +    addRow("crosshair", QString("%1, %2").arg(ll.m_lat, 0, 'f', 6).arg(ll.m_lon, 0, 'f', 6));
 +  }
-+  cv->addStretch(1);
 +
 +  m_sheetScroll = new QScrollArea(m_sheet);
 +  m_sheetScroll->setObjectName("utPlaceScroll");
@@ -2740,11 +2856,18 @@ index 0000000..b8162b2
 +{
 +  if (!m_sheet || !m_sheetScroll || !m_sheetContent)
 +    return 0;
-+  // Everything but the details, plus as much of the details as fits in ~60% of the screen.
-+  int const content = m_sheetContent->sizeHint().height();
-+  m_sheetScroll->setMinimumHeight(0);
-+  m_sheetScroll->setMaximumHeight(QWIDGETSIZE_MAX);
-+  int const fixed = m_sheet->layout()->sizeHint().height() - m_sheetScroll->sizeHint().height();
++  // Heights for the real width: wrapped labels need it.
++  QLayout * sheetLayout = m_sheet->layout();
++  QMargins const m = sheetLayout->contentsMargins();
++  int const contentWidth = width() - m.left() - m.right();
++  QLayout * contentLayout = m_sheetContent->layout();
++  int const content = contentLayout->hasHeightForWidth() ? contentLayout->totalHeightForWidth(contentWidth - 4)
++                                                         : m_sheetContent->sizeHint().height();
++  // Everything but the details.
++  m_sheetScroll->setFixedHeight(0);
++  int const total = sheetLayout->hasHeightForWidth() ? sheetLayout->totalHeightForWidth(width())
++                                                     : sheetLayout->sizeHint().height();
++  int const fixed = total;
 +  int const maxTotal = height() * 62 / 100;
 +  int const scroll = std::max(0, std::min(content, maxTotal - fixed));
 +  m_sheetScroll->setFixedHeight(scroll);
