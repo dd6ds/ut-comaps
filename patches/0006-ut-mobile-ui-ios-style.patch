@@ -32,7 +32,7 @@ index 220ed5e..5f00d98 100644
  
  if (BUILD_DESIGNER)
 diff --git a/qt/draw_widget.cpp b/qt/draw_widget.cpp
-index 1bb44ea..ec0e78d 100644
+index 1bb44ea..9eb9e8d 100644
 --- a/qt/draw_widget.cpp
 +++ b/qt/draw_widget.cpp
 @@ -8,9 +8,12 @@
@@ -179,7 +179,7 @@ index 1bb44ea..ec0e78d 100644
    m_routeInfo->setText(text);
    PlaceRouteInfo();
    m_routeInfo->show();
-@@ -850,10 +883,84 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
+@@ -850,10 +883,99 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
  
  void DrawWidget::HideRouteInfo()
  {
@@ -193,6 +193,21 @@ index 1bb44ea..ec0e78d 100644
 +{
 +  auto const points = m_framework.GetRoutingManager().GetRoutePoints();
 +  return points.size() >= 2 && (points.front().m_isMyPosition || points.back().m_isMyPosition);
++}
++
++bool DrawWidget::RouteFromMyPosition()
++{
++  if (!m_framework.GetCurrentPosition())
++    return false;
++  auto & routingManager = m_framework.GetRoutingManager();
++  routingManager.RemoveRoutePoint(RouteMarkType::Start);
++  RouteMarkData start;
++  start.m_pointType = RouteMarkType::Start;
++  start.m_isMyPosition = true;
++  routingManager.AddRoutePoint(std::move(start));
++  if (routingManager.GetRoutePoints().size() >= 2)
++    routingManager.BuildRoute();
++  return true;
 +}
 +
 +void DrawWidget::RouteFromCurrentPlace(RouteMarkType type)
@@ -264,7 +279,7 @@ index 1bb44ea..ec0e78d 100644
  void DrawWidget::PlaceRouteInfo()
  {
    if (!m_routeInfo)
-@@ -865,6 +972,25 @@ void DrawWidget::PlaceRouteInfo()
+@@ -865,6 +987,25 @@ void DrawWidget::PlaceRouteInfo()
    m_routeInfo->move((width() - m_routeInfo->width()) / 2, margin);
  }
  
@@ -291,7 +306,7 @@ index 1bb44ea..ec0e78d 100644
  {
    TBase::resizeEvent(e);
 diff --git a/qt/draw_widget.hpp b/qt/draw_widget.hpp
-index 1d4c24a..70df2a8 100644
+index 1d4c24a..d72b0ba 100644
 --- a/qt/draw_widget.hpp
 +++ b/qt/draw_widget.hpp
 @@ -5,9 +5,11 @@
@@ -314,7 +329,7 @@ index 1d4c24a..70df2a8 100644
  #include <memory>
  #include <optional>
  #include <string>
-@@ -71,6 +74,22 @@ public:
+@@ -71,6 +74,26 @@ public:
    void SetMapStyleToDefault();
    void SetMapStyleToVehicle();
  
@@ -333,11 +348,15 @@ index 1d4c24a..70df2a8 100644
 +  void ToggleBookmarkForCurrentPlace();
 +  void EditCurrentPlace();
 +  void CloseCurrentPlace();
++  // Navigation needs the own position as start (or finish).
++  bool CanFollowRoute() const;
++  // Replaces the route's start with the own position; false if it is unknown.
++  bool RouteFromMyPosition();
 +
  protected:
    /// @name Overriden from MapWidget.
    //@{
-@@ -88,6 +107,7 @@ protected:
+@@ -88,6 +111,7 @@ protected:
    void keyPressEvent(QKeyEvent * e) override;
    void keyReleaseEvent(QKeyEvent * e) override;
    void resizeEvent(QResizeEvent * e) override;
@@ -345,17 +364,16 @@ index 1d4c24a..70df2a8 100644
  
  private:
    // Ubuntu Touch: route summary (distance, time, ascent) shown over the map.
-@@ -95,6 +115,8 @@ private:
+@@ -95,6 +119,7 @@ private:
    void HideRouteInfo();
    void PlaceRouteInfo();
    QLabel * m_routeInfo = nullptr;
 +  MobileSinks m_mobile;
-+  bool CanFollowRoute() const;
  
    void SubmitFakeLocationPoint(m2::PointD const & pt);
    void SubmitRulerPoint(m2::PointD const & pt);
 diff --git a/qt/mainwindow.cpp b/qt/mainwindow.cpp
-index 9aaf07c..3c2da11 100644
+index 9aaf07c..2beb3d8 100644
 --- a/qt/mainwindow.cpp
 +++ b/qt/mainwindow.cpp
 @@ -11,6 +11,10 @@
@@ -460,7 +478,7 @@ index 9aaf07c..3c2da11 100644
  }
  
  void MainWindow::OnMapModeChange(MapMode const mapMode)
-@@ -922,6 +953,103 @@ void MainWindow::OnMapModeChange(MapMode const mapMode)
+@@ -922,6 +953,129 @@ void MainWindow::OnMapModeChange(MapMode const mapMode)
    SetMapMode(mapMode);
  }
  
@@ -501,7 +519,33 @@ index 9aaf07c..3c2da11 100644
 +  a.download = [this] { OnDownloadClicked(); };
 +  a.retryDownload = [this] { OnRetryDownloadClicked(); };
 +  a.cancelDownload = [this] { OnCancelDownloadClicked(); };
-+  a.followRoute = [this] { OnFollowRoute(); };
++  a.followRoute = [this]
++  {
++    if (m_pDrawWidget->CanFollowRoute())
++    {
++      OnFollowRoute();
++      return;
++    }
++    QMessageBox box(this);
++    box.setWindowTitle(mobile::Tr("Navigation", "Navigation"));
++    box.setText(mobile::Tr("Navigation can only start at your current position.\n\n"
++                           "Calculate the route from your position to the destination?",
++                           "Die Navigation kann nur am aktuellen Standort starten.\n\n"
++                           "Route von deinem Standort zum Ziel berechnen?"));
++    QAbstractButton * fromHere =
++        box.addButton(mobile::Tr("From my position", "Ab meinem Standort"), QMessageBox::AcceptRole);
++    box.addButton(mobile::Tr("Cancel", "Abbrechen"), QMessageBox::RejectRole);
++    box.exec();
++    if (box.clickedButton() != fromHere)
++      return;
++    if (!m_pDrawWidget->RouteFromMyPosition())
++    {
++      QMessageBox::information(this, mobile::Tr("Navigation", "Navigation"),
++                               mobile::Tr("Your position is not known yet. Turn on location and wait for a GPS fix.",
++                                          "Dein Standort ist noch nicht bekannt. Bitte Standortdienste einschalten "
++                                          "und auf ein GPS-Signal warten."));
++    }
++  };
 +  a.clearRoute = [this] { OnClearRoute(); };
 +  m_mobileUi->Init(std::move(a));
 +
@@ -1422,10 +1466,10 @@ index 0000000..0d61835
 +Q_COREAPP_STARTUP_FUNCTION(UtComapsInstallKeepDisplayOn)
 diff --git a/qt/ut_mobile_ui.cpp b/qt/ut_mobile_ui.cpp
 new file mode 100644
-index 0000000..abc1af8
+index 0000000..6827293
 --- /dev/null
 +++ b/qt/ut_mobile_ui.cpp
-@@ -0,0 +1,1661 @@
+@@ -0,0 +1,1667 @@
 +#include "qt/ut_mobile_ui.hpp"
 +
 +#include "qt/draw_widget.hpp"
@@ -2708,7 +2752,13 @@ index 0000000..abc1af8
 +  m_routeSecondary->setText(secondary);
 +  m_routeSecondary->setVisible(!secondary.isEmpty());
 +  m_routeStart->setVisible(!error);
-+  m_routeStart->setEnabled(canStart);
++  // Always tappable: without the own position as start, tapping explains
++  // that and offers to route from there (like the iPhone app).
++  m_routeStart->setEnabled(true);
++  if (!error && !canStart)
++    m_routeSecondary->setText(Tr("Preview – navigation starts at your position",
++                                 "Vorschau – Navigation startet am eigenen Standort"));
++  m_routeSecondary->setVisible(!m_routeSecondary->text().isEmpty());
 +  m_routeWanted = true;
 +  Relayout();
 +}
