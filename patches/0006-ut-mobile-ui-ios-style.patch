@@ -1,13 +1,14 @@
 diff --git a/qt/CMakeLists.txt b/qt/CMakeLists.txt
-index 220ed5e..f6a3f9a 100644
+index 220ed5e..5f00d98 100644
 --- a/qt/CMakeLists.txt
 +++ b/qt/CMakeLists.txt
-@@ -64,8 +64,13 @@ set(SRC
+@@ -64,10 +64,19 @@ set(SRC
    update_dialog.cpp
    update_dialog.hpp
    ut_fit_screen.cpp
 +  ut_icons_data.hpp
    ut_integration.cpp
++  ut_keep_display_on.cpp
    ut_integration.hpp
 +  ut_mobile_ui.cpp
 +  ut_mobile_ui.hpp
@@ -15,12 +16,18 @@ index 220ed5e..f6a3f9a 100644
 +  ut_test_hook.hpp
  )
  
++# ut-comaps: keep the display on (repowerd D-Bus API).
++find_package(Qt6 REQUIRED COMPONENTS DBus)
++
  omim_add_executable(${PROJECT_NAME} MACOSX_BUNDLE ${RES_SOURCES} ${SRC})
-@@ -96,6 +101,7 @@ target_link_libraries(${PROJECT_NAME}
+ 
+ set_target_properties(${PROJECT_NAME} PROPERTIES AUTOMOC ON)
+@@ -96,6 +105,8 @@ target_link_libraries(${PROJECT_NAME}
  target_link_libraries(${PROJECT_NAME}
    PRIVATE
      gflags::gflags
 +    Qt6::Svg
++    Qt6::DBus
  )
  
  if (BUILD_DESIGNER)
@@ -1321,6 +1328,98 @@ index 0000000..663edbc
 +inline Glyph const k_share = {"M25.9766 4.44336L62.2559 4.44336C72.6562 4.44336 78.4668-1.36719 78.4668-11.7676L78.4668-41.4062C78.4668-51.8066 72.6562-57.5684 62.2559-57.5684L25.9766-57.5684C15.5762-57.5684 9.76562-51.8066 9.76562-41.4062L9.76562-11.7676C9.76562-1.36719 15.5762 4.44336 25.9766 4.44336ZM25.9766-2.58789C20.1172-2.58789 16.7969-5.9082 16.7969-11.7676L16.7969-41.4062C16.7969-47.2168 20.1172-50.5371 25.9766-50.5371L62.2559-50.5371C68.1152-50.5371 71.4355-47.2168 71.4355-41.4062L71.4355-11.7676C71.4355-5.9082 68.1152-2.58789 62.2559-2.58789L25.9766-2.58789Z M57.5497-20.8491L91.6275-54.927C95.9089-59.2083 95.9089-66.3208 91.593-70.6367C87.3117-74.918 80.1647-74.9525 75.8834-70.6712L41.8055-36.5933C37.5242-32.312 37.5933-25.1995 41.8746-20.9182C46.1904-16.6024 53.2683-16.5678 57.5497-20.8491Z M65.2145-62.5574C65.8015-61.9704 66.7338-61.5216 67.6314-61.5907L75.6071-61.9014L83.134-62.1776L82.8923-54.6162L82.547-46.6751C82.5124-45.7429 82.8922-44.8797 83.5137-44.2583C84.7912-42.9807 86.6557-42.9117 87.8987-44.1547C88.5892-44.8452 88.7963-45.6047 88.8309-46.537L88.4166-63.8694C88.4166-65.1123 88.1058-65.8375 87.4498-66.4935C86.8283-67.1149 86.1033-67.4256 84.8257-67.4602L67.5278-67.84C66.5611-67.84 65.836-67.5983 65.1455-66.9078C63.9026-65.6649 63.9371-63.8349 65.2145-62.5574ZM47.2953-26.3389C48.6418-24.9924 50.886-24.9579 52.1635-26.2353L79.0943-53.1662L86.5176-61.418C87.5879-62.6265 87.6569-64.4218 86.5176-65.5612C85.4127-66.6661 83.6174-66.597 82.4088-65.5267L74.157-58.1035L47.2262-31.1726C45.9487-29.8952 45.9832-27.6509 47.2953-26.3389Z", 9.77, -74.95, 86.14, 79.40};
 +inline Glyph const k_more = {"M72.7051-27.6855C76.9043-27.6855 80.2734-31.0547 80.2734-35.2539C80.2734-39.4531 76.9043-42.8223 72.7051-42.8223C68.5547-42.8223 65.1367-39.4531 65.1367-35.2539C65.1367-31.0547 68.5547-27.6855 72.7051-27.6855Z M43.5547-27.6855C47.7539-27.6855 51.123-31.0547 51.123-35.2539C51.123-39.4531 47.7539-42.8223 43.5547-42.8223C39.3555-42.8223 35.9863-39.4531 35.9863-35.2539C35.9863-31.0547 39.3555-27.6855 43.5547-27.6855Z M14.4043-27.6855C18.6035-27.6855 21.9727-31.0547 21.9727-35.2539C21.9727-39.4531 18.6035-42.8223 14.4043-42.8223C10.2051-42.8223 6.83594-39.4531 6.83594-35.2539C6.83594-31.0547 10.2051-27.6855 14.4043-27.6855Z", 6.84, -42.82, 73.44, 15.14};
 +}  // namespace ut_icons
+diff --git a/qt/ut_keep_display_on.cpp b/qt/ut_keep_display_on.cpp
+new file mode 100644
+index 0000000..0d61835
+--- /dev/null
++++ b/qt/ut_keep_display_on.cpp
+@@ -0,0 +1,86 @@
++// ut-comaps: no screen dimming or locking while the app is in the foreground
++// (navigation, reading the map). Uses repowerd's Unity.Screen API, which the
++// "keep-display-on" AppArmor policy group allows. The request is dropped as
++// soon as the app goes to the background; repowerd also drops it when the app
++// quits or crashes (it belongs to our D-Bus connection).
++#include <QtCore/QCoreApplication>
++#include <QtCore/QTimer>
++#include <QtDBus/QDBusConnection>
++#include <QtDBus/QDBusMessage>
++#include <QtDBus/QDBusPendingCallWatcher>
++#include <QtDBus/QDBusPendingReply>
++#include <QtGui/QGuiApplication>
++
++namespace
++{
++char const * const kService = "com.canonical.Unity.Screen";
++char const * const kPath = "/com/canonical/Unity/Screen";
++char const * const kInterface = "com.canonical.Unity.Screen";
++
++class KeepDisplayOn : public QObject
++{
++public:
++  explicit KeepDisplayOn(QObject * parent) : QObject(parent)
++  {
++    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this,
++            [this](Qt::ApplicationState state) { Update(state == Qt::ApplicationActive); });
++    Update(QGuiApplication::applicationState() == Qt::ApplicationActive);
++  }
++
++  ~KeepDisplayOn() override { Update(false); }
++
++private:
++  void Update(bool on)
++  {
++    QDBusConnection bus = QDBusConnection::systemBus();
++    if (!bus.isConnected())
++      return;
++    if (on && m_cookie < 0 && !m_pending)
++    {
++      m_pending = true;
++      auto const msg = QDBusMessage::createMethodCall(kService, kPath, kInterface, "keepDisplayOn");
++      auto * watcher = new QDBusPendingCallWatcher(bus.asyncCall(msg), this);
++      connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher * w)
++      {
++        QDBusPendingReply<int> const reply = *w;
++        w->deleteLater();
++        m_pending = false;
++        if (reply.isError())
++          return;
++        m_cookie = reply.value();
++        // Went to the background while the call was running.
++        if (QGuiApplication::applicationState() != Qt::ApplicationActive)
++          Update(false);
++      });
++    }
++    else if (!on && m_cookie >= 0)
++    {
++      auto msg = QDBusMessage::createMethodCall(kService, kPath, kInterface, "removeDisplayOnRequest");
++      msg << m_cookie;
++      bus.call(msg, QDBus::NoBlock);
++      m_cookie = -1;
++    }
++  }
++
++  int m_cookie = -1;
++  bool m_pending = false;
++};
++
++void Install()
++{
++  // Only on the phone (Lomiri sets APP_ID for click apps) and once the
++  // QGuiApplication exists.
++  if (!qEnvironmentVariableIsSet("APP_ID") || qEnvironmentVariableIsSet("UT_COMAPS_NO_KEEP_DISPLAY_ON"))
++    return;
++  QTimer::singleShot(0, [] {
++    if (qGuiApp)
++      new KeepDisplayOn(qGuiApp);
++  });
++}
++}  // namespace
++
++static void UtComapsInstallKeepDisplayOn()
++{
++  Install();
++}
++Q_COREAPP_STARTUP_FUNCTION(UtComapsInstallKeepDisplayOn)
 diff --git a/qt/ut_mobile_ui.cpp b/qt/ut_mobile_ui.cpp
 new file mode 100644
 index 0000000..abc1af8

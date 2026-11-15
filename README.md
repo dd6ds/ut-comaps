@@ -64,6 +64,9 @@ bildschirmfüllend unter runden, schwebenden Bedienelementen – wie in der CoMa
 - Vollbild-Dialoge (Karten herunterladen, Lesezeichen, Einstellungen …) bekommen eine Kopfzeile mit
   rundem Zurück-Knopf und Titel; Listen scrollen mit dem Finger
 
+Solange die App im Vordergrund ist, dimmt und sperrt das Display nicht (repowerd
+`keepDisplayOn`, AppArmor-Gruppe `keep-display-on`); im Hintergrund gilt wieder das normale Verhalten.
+
 Die Texte folgen der Sprache (Deutsch/Englisch), die Farben dem hellen/dunklen Erscheinungsbild.
 Die Bedienelemente sind Geschwister des Karten-Widgets (nicht Kinder): die Karte nimmt Touch-Ereignisse
 selbst an und würde sonst alle Berührungen schlucken.
