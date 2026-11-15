@@ -8,7 +8,7 @@ on:
         description: "Ergebnis als GitHub-Release veröffentlichen"
         type: boolean
         default: false
-  # Tag pushen (git tag v0.1.0 && git push --tags) -> Build + Release
+  # Tag pushen (git tag v1.0.0 && git push --tags, oder ./build.sh release 1.0.0) -> Build + Release
   push:
     tags: ['v*']
 
@@ -21,7 +21,7 @@ concurrency:
 
 env:
   # Version für Builds ohne Tag (mit Tag v1.2.3 wird es 1.2.3).
-  BASE_VERSION: "0.1.0"
+  BASE_VERSION: "1.0.0"
   IMAGE: ut-comaps:noble-arm64
   # GitHub-Spiegel von Codeberg, aus den Runnern meist schneller erreichbar.
   COMAPS_GIT_URL: https://github.com/comaps/comaps.git

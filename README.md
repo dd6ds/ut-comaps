@@ -2,17 +2,35 @@
   <img src="icons/ut-comaps.svg" alt="ut-comaps Icon" width="128" height="128">
 </p>
 
-# CoMaps für Ubuntu Touch – Portierungs-Scaffold
+# CoMaps für Ubuntu Touch
 
-Click-Package-Gerüst (clickable) zum Bauen von [CoMaps](https://codeberg.org/comaps/comaps)
-(fork von Organic Maps) für **Ubuntu Touch**.
+[CoMaps](https://codeberg.org/comaps/comaps) (Fork von Organic Maps) als Click-Paket für
+**Ubuntu Touch**: Offline-Karten, Suche und Navigation auf Basis von OpenStreetMap – mit einer
+Handy-Oberfläche im Stil der CoMaps-App fürs iPhone.
 
-> ## ⚠️ Status: Vorarbeit, kein fertiger Port
->
-> Dieses Projekt liefert die komplette Build- und Packaging-Infrastruktur,
-> damit CoMaps mit `clickable` gebaut und installiert werden kann. **Es wird
-> aber erst funktionieren, wenn Ubuntu Touch Noble (24.04) mit Qt6 die
-> Geräte erreicht** – bzw. heute schon auf Noble-Entwicklungsimages.
+<p align="center">
+  <img src="docs/screenshots/karte.jpg" alt="Karte" width="180">
+  <img src="docs/screenshots/suche.jpg" alt="Suche" width="180">
+  <img src="docs/screenshots/ortsdetails.jpg" alt="Ortsdetails" width="180">
+</p>
+<p align="center">
+  <img src="docs/screenshots/menue.jpg" alt="Menü" width="180">
+  <img src="docs/screenshots/ebenen.jpg" alt="Kartenebenen" width="180">
+  <img src="docs/screenshots/downloader.jpg" alt="Karten herunterladen" width="180">
+</p>
+
+> **Status:** läuft auf Ubuntu Touch **24.04 (Noble)** und **26.04** (getestet auf einem
+> Poco X3 Pro). Ältere Versionen (16.04/20.04) reichen für CoMaps nicht aus, siehe unten.
+
+## Schnellstart
+
+```bash
+./build.sh ci                # auf GitHub bauen lassen (~15 min), Click nach build/ laden
+./build.sh phone             # per USB/adb auf dem Handy installieren und starten
+./build.sh release 1.0.0     # Release-Build mit sauberer Version (z. B. für den OpenStore)
+```
+
+Details zu `build.sh` und zum lokalen Build unter [Bauen](#bauen).
 
 ## Warum Noble (24.04)?
 
@@ -43,7 +61,8 @@ ergänzt es für Ubuntu Touch (neue Datei `qt/ut_integration.{hpp,cpp}`):
 - **Sprache:** In *Preferences → Language (after restart)* wählst du „Like the phone“ oder eine
   feste Sprache. Sie bestimmt die CoMaps-Texte (Suche und Kategorien, Ortstypen, Routing-Hinweise,
   Ländernamen) und wird beim nächsten Start übernommen. Die Beschriftungen der Desktop-Oberfläche
-  selbst sind in CoMaps nicht übersetzt und bleiben Englisch. Die Sprache der **Kartenbeschriftung**
+  selbst übersetzt CoMaps nicht; die Handy-Oberfläche (siehe unten) bringt eigene deutsche und
+  englische Texte mit. Die Sprache der **Kartenbeschriftung**
   stellst du weiterhin unter „Map Language“ ein.
 - Die Wayland-App-ID wird auf `$APP_ID` gesetzt, damit Lomiri das Fenster der App zuordnet.
 
@@ -107,13 +126,39 @@ ut-comaps/
 
 - Linux-Host mit Docker und **clickable ≥ 8** (`pip install clickable-ut`)
 - mind. 30 GB freier Platz, gute Internetverbindung
-- Handy mit Ubuntu Touch **Noble (24.04)**: Stable/Focal-Geräte funktionieren
+- Handy mit Ubuntu Touch **24.04 (Noble)** oder **26.04**: Stable/Focal-Geräte funktionieren
   **nicht** (Qt 5.12/C++17 reicht für CoMaps nicht aus)
-- Geduld: Der Build läuft arm64-emuliert (qemu). Rechne mit mehreren Stunden
+- Für GitHub-Builds (`./build.sh ci` / `release`): gespeicherte Git-Zugangsdaten für github.com
+  oder `GH_TOKEN`
+- Für den lokalen Build Geduld: Er läuft arm64-emuliert (qemu). Rechne mit mehreren Stunden
   bis über Nacht. Ein nativer arm64-Rechner (z. B. Raspberry Pi 5 mit Docker)
   baut deutlich schneller.
 
 ## Bauen
+
+### build.sh
+
+`build.sh` braucht auf dem Rechner nur Docker (clickable läuft selbst im Container
+`clickable-runner`, wie bei den anderen UT-Projekten) und für die Installation `adb`:
+
+| Aufruf | Was passiert |
+|---|---|
+| `./build.sh ci` | startet den GitHub-Build, wartet und lädt das Click nach `build/` (Version `1.0.0.<Lauf>`) |
+| `./build.sh release <version>` | setzt das Tag `v<version>`, GitHub baut und veröffentlicht ein Release mit genau dieser Version, das Click landet in `build/` |
+| `./build.sh download` | lädt das Click des neuesten GitHub-Releases nach `build/` |
+| `./build.sh phone [datei.click]` | installiert das neueste Click aus `build/` (oder das angegebene) per adb und startet die App |
+| `./build.sh` | lokaler Build mit clickable (baut die Docker-Images bei Bedarf, holt die Quellen) |
+| `./build.sh local-phone` | lokaler Build, danach installieren |
+| `./build.sh <clickable-Argumente>` | beliebiger clickable-Befehl, z. B. `script source`, `clean` |
+
+Auf Images ohne `pkcon` (z. B. UT 26.04) installiert `phone` mit `sudo click install`; das Handy
+fragt dann im Terminal nach seinem Passwort.
+
+**OpenStore:** Für einen Upload `./build.sh release 1.0.0` (danach `1.0.1`, `1.1.0` …). Der
+OpenStore verlangt bei jedem Upload eine höhere Version als die vorige.
+
+Die folgenden Abschnitte beschreiben, was `build.sh` für den lokalen Build tut – zum Nachvollziehen
+oder wenn du es von Hand machen willst.
 
 ### 1) Docker-Image für clickable bauen (einmalig)
 
@@ -182,7 +227,7 @@ Das baut und packt nach `build/*.click`.
   so etwa 1–2 Stunden statt einer Nacht und bleibt unter dem 6-Stunden-Limit von GitHub.
 - **Start:** manuell unter *Actions → Build click → Run workflow* (optional mit Release) oder
   per Tag: `git tag v0.1.0 && git push --tags` baut und veröffentlicht ein Release.
-- **Version:** Mit Tag `v1.2.3` wird die Click-Version `1.2.3`, sonst `0.1.0+git<commit>`
+- **Version:** Mit Tag `v1.2.3` wird die Click-Version `1.2.3`, sonst `1.0.0.<Laufnummer>`
   (`BASE_VERSION` im Workflow).
 - **Ergebnis:** `ut-comaps_<version>_arm64.click` plus `SHA256SUMS` als Workflow-Artefakt
   (30 Tage) und bei Releases im GitHub-Release, mit Installationsanleitung.
@@ -201,22 +246,19 @@ Das baut und packt nach `build/*.click`.
   libc/libstdc++, EGL/GLES/GL, Wayland, DRM, D-Bus und systemd. Die müssen vom Handy kommen,
   sonst bricht das GPU-Rendering über libhybris.
 
-## Was nach dem ersten Build voraussichtlich noch Handarbeit braucht
+## Bekannte Punkte
 
-1. **Framework prüfen**: gesetzt ist `ubuntu-touch-24.04-1.x`. Kontrolliere auf dem Gerät mit
-   `click framework list` und passe es ggf. über `COMAPS_FRAMEWORK` an.
-2. **QPA/Wayland**: Der Wrapper setzt `QT_QPA_PLATFORM=wayland`. Ob Lomiri die
-   Qt6-Wayland-Session reibungslos annimmt, ist Teil der laufenden UBports-Qt6-Migration.
-3. **OpenGL**: CoMaps braucht OpenGL ES. Bei Problemen das AppArmor-Log prüfen
-   (`journalctl -f` bzw. `/var/log/syslog`).
-4. **App-Lifecycle**: Das Qt-Widgets-Frontend kennt UTs Suspend/Resume-Semantik nicht.
-5. **Größe des Clicks**: `data/` wird komplett kopiert. Mit
-   `COMAPS_DATA_EXCLUDE="ordner1:ordner2" clickable build` lässt du Unnötiges weg.
-
-## Empfehlung bis dahin
-
-Für **fertige** Offline-OSM-Navigation auf Ubuntu Touch gibt es heute
-[Pure Maps](https://puremaps.scrise.wtf/) im OpenStore.
+- **Framework:** gesetzt ist `ubuntu-touch-24.04-1.x` (läuft auch auf 26.04). Kontrolle auf dem
+  Gerät mit `click framework list`, anpassen über `COMAPS_FRAMEWORK`.
+- **Neuere Images (26.04):** Der Launcher vergrößert die statische TLS-Reserve von glibc
+  (sonst lädt libhybris den Android-Linker nicht) und `package.sh` bündelt eine zur gebündelten
+  libcrypto passende libssl (sonst „TLS initialization failed“ beim Kartendownload).
+- **Bildschirmtastatur:** Der Launcher übergibt dem Maliit-Plugin die Serveradresse direkt
+  (`MALIIT_SERVER_ADDRESS`); die Abfrage per D-Bus erreicht das Plugin unter Qt 6 nicht.
+- **Display:** Solange die App im Vordergrund ist, wird der Bildschirm nicht gedimmt oder gesperrt.
+- **Größe des Clicks:** `data/` wird komplett kopiert. Mit
+  `COMAPS_DATA_EXCLUDE="ordner1:ordner2" ./build.sh` lässt du Unnötiges weg.
+- **Icons:** `icons/ut-comaps.svg` ist das App-Icon, `icons/ut-comaps-v1.svg` das frühere.
 
 ## Lizenz / Attribution
 
