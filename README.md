@@ -154,6 +154,10 @@ ut-comaps/
 Auf Images ohne `pkcon` (z. B. UT 26.04) installiert `phone` mit `sudo click install`; das Handy
 fragt dann im Terminal nach seinem Passwort.
 
+`ci` und `release` laden das Click aus dem Workflow-Artefakt des Laufs. Darf der Workflow kein
+GitHub-Release anlegen (GitHub antwortete zeitweise mit HTTP 403), legt `release` es mit deinem
+Token selbst an.
+
 **OpenStore:** Für einen Upload `./build.sh release 0.1.0` (danach `0.1.1`, `0.2.0` …). Der
 OpenStore verlangt bei jedem Upload eine höhere Version als die vorige.
 

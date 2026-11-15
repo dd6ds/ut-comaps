@@ -158,7 +158,7 @@ ci() {
         "https://api.github.com/repos/$REPO/actions/workflows/build.yml/dispatches" \
         -d '{"ref":"main","inputs":{"release":true}}' >/dev/null
     wait_for_run "$before"
-    download
+    download_artifact
 }
 
 latest_run_id() {
@@ -166,7 +166,8 @@ latest_run_id() {
         | python3 -c 'import json,sys; print(json.load(sys.stdin)["workflow_runs"][0]["id"])'
 }
 
-# Waits for the first workflow run newer than run id $1.
+# Waits for the first workflow run newer than run id $1; sets RUN_ID.
+RUN_ID=""
 wait_for_run() {
     local before="$1" id="" status="" conclusion=""
     echo "build.sh: GitHub build started, waiting (usually 10-20 minutes) ..."
@@ -180,8 +181,49 @@ print(r["id"], r["status"], r["conclusion"])')
         echo "  $(date +%H:%M:%S) $status"
         [[ "$status" == "completed" ]] && break
     done
+    RUN_ID="$id"
     [[ "$conclusion" == "success" ]] \
-        || die "GitHub build failed: https://github.com/$REPO/actions/runs/$id"
+        || echo "build.sh: note: the run ended with '$conclusion' - using its click artifact if there is one" \
+                "(https://github.com/$REPO/actions/runs/$id)"
+}
+
+# Downloads the click artifact of run $RUN_ID into build/; sets CLICK.
+CLICK=""
+download_artifact() {
+    local token url name
+    token="$(github_token)"
+    [[ -n "$token" ]] || die "no GitHub token"
+    read -r url name < <(api -H "Authorization: Bearer $token" \
+        "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+        | python3 -c 'import json,sys
+a = [x for x in json.load(sys.stdin)["artifacts"] if not x["expired"]]
+print(a[0]["archive_download_url"], a[0]["name"]) if a else print("")')
+    [[ -n "${url:-}" ]] || die "the build produced no click: https://github.com/$REPO/actions/runs/$RUN_ID"
+    mkdir -p "$OUT_DIR"
+    local zip="$OUT_DIR/$name.zip"
+    echo "build.sh: downloading $name"
+    curl -fL --progress-bar -H "Authorization: Bearer $token" -o "$zip" "$url"
+    python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$zip" "$OUT_DIR"
+    rm -f "$zip"
+    CLICK="$(ls -t "$OUT_DIR"/*.click | head -n 1)"
+    echo "build.sh: $CLICK"
+}
+
+# Creates the GitHub release for tag $1 with $CLICK if the workflow could not.
+ensure_release() {
+    local tag="$1" token
+    token="$(github_token)"
+    api "https://api.github.com/repos/$REPO/releases/tags/$tag" >/dev/null 2>&1 && return
+    echo "build.sh: creating the GitHub release $tag"
+    local upload
+    upload="$(curl -fsS -X POST -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/$REPO/releases" \
+        -d "{\"tag_name\":\"$tag\",\"name\":\"ut-comaps $tag\",\"body\":\"CoMaps für Ubuntu Touch (arm64, Noble/24.04 und neuer). Kartendaten © OpenStreetMap-Mitwirkende (ODbL), CoMaps Apache-2.0.\"}" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"].split("{")[0])')" \
+        || { echo "build.sh: could not create the release (the click is in build/ anyway)" >&2; return; }
+    curl -fsS -X POST -H "Authorization: Bearer $token" -H "Content-Type: application/octet-stream" \
+        --data-binary @"$CLICK" "$upload?name=$(basename "$CLICK")" >/dev/null \
+        && echo "build.sh: https://github.com/$REPO/releases/tag/$tag"
 }
 
 # Release with a clean version (OpenStore): tag v<version> on origin/main.
@@ -200,7 +242,11 @@ release() {
     git -C "$PROJECT_DIR" tag -a "$tag" -m "ut-comaps $version"
     git -C "$PROJECT_DIR" push -q origin "$tag"
     wait_for_run "$before"
-    download
+    download_artifact
+    [[ "$(basename "$CLICK")" == "ut-comaps_${version}_arm64.click" ]] \
+        || echo "build.sh: warning: expected ut-comaps_${version}_arm64.click" >&2
+    ensure_release "$tag"
+    echo "build.sh: for the OpenStore upload: $CLICK"
 }
 
 # --- Phone ------------------------------------------------------------------------
