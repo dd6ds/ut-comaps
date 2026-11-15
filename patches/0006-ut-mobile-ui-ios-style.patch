@@ -1,0 +1,3249 @@
+diff --git a/qt/CMakeLists.txt b/qt/CMakeLists.txt
+index 220ed5e..f6a3f9a 100644
+--- a/qt/CMakeLists.txt
++++ b/qt/CMakeLists.txt
+@@ -64,8 +64,13 @@ set(SRC
+   update_dialog.cpp
+   update_dialog.hpp
+   ut_fit_screen.cpp
++  ut_icons_data.hpp
+   ut_integration.cpp
+   ut_integration.hpp
++  ut_mobile_ui.cpp
++  ut_mobile_ui.hpp
++  ut_test_hook.cpp
++  ut_test_hook.hpp
+ )
+ 
+ omim_add_executable(${PROJECT_NAME} MACOSX_BUNDLE ${RES_SOURCES} ${SRC})
+@@ -96,6 +101,7 @@ target_link_libraries(${PROJECT_NAME}
+ target_link_libraries(${PROJECT_NAME}
+   PRIVATE
+     gflags::gflags
++    Qt6::Svg
+ )
+ 
+ if (BUILD_DESIGNER)
+diff --git a/qt/draw_widget.cpp b/qt/draw_widget.cpp
+index 1bb44ea..1270061 100644
+--- a/qt/draw_widget.cpp
++++ b/qt/draw_widget.cpp
+@@ -8,6 +8,7 @@
+ #include "qt/qt_common/helpers.hpp"
+ #include "qt/routing_settings_dialog.hpp"
+ #include "qt/screenshoter.hpp"
++#include "qt/ut_mobile_ui.hpp"
+ 
+ #include "generator/borders.hpp"
+ 
+@@ -101,8 +102,18 @@ DrawWidget::DrawWidget(Framework & framework, std::unique_ptr<ScreenshotParams>
+ {
+   setFocusPolicy(Qt::StrongFocus);
+ 
+-  m_framework.SetPlacePageListeners([this]() { ShowPlacePage(); }, {} /* onClose */, {} /* onUpdate */,
+-                                    {} /*onSwitchFullScreen */);
++  m_framework.SetPlacePageListeners([this]() { ShowPlacePage(); },
++                                    [this]()
++  {
++    if (m_mobile.hidePlace)
++      m_mobile.hidePlace();
++  },
++                                    [this]()
++  {
++    // ut-comaps: the phone place page stays open, so refresh it.
++    if (m_mobile.showPlace && m_framework.HasPlacePageInfo())
++      ShowPlacePage();
++  }, {} /*onSwitchFullScreen */);
+ 
+   auto & routingManager = m_framework.GetRoutingManager();
+ 
+@@ -669,6 +680,12 @@ void DrawWidget::ShowPlacePage()
+     address = m_framework.GetAddressAtPoint(info.GetMercator());
+   }
+ 
++  if (m_mobile.showPlace)
++  {
++    m_mobile.showPlace(info, address);
++    return;
++  }
++
+   std::unique_ptr<QDialog> placePageDialog = nullptr;
+   bool developerMode;
+   if (settings::Get(settings::kDeveloperMode, developerMode) && developerMode)
+@@ -776,11 +793,11 @@ QString RouterName(routing::RouterType type)
+ {
+   switch (type)
+   {
+-  case routing::RouterType::Vehicle: return QObject::tr("Car");
+-  case routing::RouterType::Pedestrian: return QObject::tr("Walk");
+-  case routing::RouterType::Bicycle: return QObject::tr("Bike");
+-  case routing::RouterType::Transit: return QObject::tr("Transit");
+-  case routing::RouterType::Ruler: return QObject::tr("Ruler");
++  case routing::RouterType::Vehicle: return mobile::Tr("Car", "Auto");
++  case routing::RouterType::Pedestrian: return mobile::Tr("Walk", "Zu Fuß");
++  case routing::RouterType::Bicycle: return mobile::Tr("Bike", "Fahrrad");
++  case routing::RouterType::Transit: return mobile::Tr("Transit", "ÖPNV");
++  case routing::RouterType::Ruler: return mobile::Tr("Ruler", "Lineal");
+   default: return {};
+   }
+ }
+@@ -788,25 +805,17 @@ QString RouterName(routing::RouterType type)
+ 
+ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
+ {
+-  if (!m_routeInfo)
+-  {
+-    m_routeInfo = new QLabel(this);
+-    m_routeInfo->setObjectName("utRouteInfo");
+-    m_routeInfo->setAlignment(Qt::AlignCenter);
+-    m_routeInfo->setWordWrap(true);
+-    m_routeInfo->setAttribute(Qt::WA_TransparentForMouseEvents);
+-    m_routeInfo->setStyleSheet(
+-        "QLabel#utRouteInfo { background: rgba(32,32,32,220); color: white; border-radius: 10px;"
+-        " padding: 8px 14px; font-weight: bold; }");
+-  }
+-
+   auto & routingManager = m_framework.GetRoutingManager();
+-  QString text;
++  // primary: "35 min · 35 km", secondary: router and ascent (phone UI);
++  // text: everything in one label (desktop).
++  QString text, primary, secondary;
+   if (code != routing::RouterResultCode::NoError)
+   {
+     if (code == routing::RouterResultCode::Cancelled)
+       return;
+     text = tr("No route: %1").arg(QString::fromStdString(routing::DebugPrint(code)));
++    primary = mobile::Tr("No route", "Keine Route");
++    secondary = QString::fromStdString(routing::DebugPrint(code));
+   }
+   else
+   {
+@@ -823,11 +832,14 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
+       return;
+     }
+     auto const routerType = routing::GetLastUsedRouter();
++    QString const distance = QString::fromStdString(info.m_distToTarget.ToString());
++    QString const duration = FormatDuration(info.m_time);
+     text = RouterName(routerType);
++    secondary = text;
+     if (!text.isEmpty())
+       text += QStringLiteral("  ·  ");
+-    text += QString::fromStdString(info.m_distToTarget.ToString()) + QStringLiteral("  ·  ") +
+-            FormatDuration(info.m_time);
++    text += distance + QStringLiteral("  ·  ") + duration;
++    primary = duration + QStringLiteral(" • ") + distance;
+ 
+     if (routerType == routing::RouterType::Pedestrian || routerType == routing::RouterType::Bicycle)
+     {
+@@ -837,11 +849,30 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
+         da.Simplify();
+         uint32_t ascent = 0, descent = 0;
+         da.CalculateAscentDescent(ascent, descent);
+-        text += QString("\n\u2191 %1 m   \u2193 %2 m").arg(ascent).arg(descent);
++        QString const updown = QString("\u2191 %1 m   \u2193 %2 m").arg(ascent).arg(descent);
++        text += "\n" + updown;
++        secondary += (secondary.isEmpty() ? "" : "   ") + updown;
+       }
+     }
+   }
+ 
++  if (m_mobile.showRoute)
++  {
++    m_mobile.showRoute(primary, secondary, code != routing::RouterResultCode::NoError, CanFollowRoute());
++    return;
++  }
++
++  if (!m_routeInfo)
++  {
++    m_routeInfo = new QLabel(this);
++    m_routeInfo->setObjectName("utRouteInfo");
++    m_routeInfo->setAlignment(Qt::AlignCenter);
++    m_routeInfo->setWordWrap(true);
++    m_routeInfo->setAttribute(Qt::WA_TransparentForMouseEvents);
++    m_routeInfo->setStyleSheet(
++        "QLabel#utRouteInfo { background: rgba(32,32,32,220); color: white; border-radius: 10px;"
++        " padding: 8px 14px; font-weight: bold; }");
++  }
+   m_routeInfo->setText(text);
+   PlaceRouteInfo();
+   m_routeInfo->show();
+@@ -850,10 +881,84 @@ void DrawWidget::ShowRouteInfo(routing::RouterResultCode code)
+ 
+ void DrawWidget::HideRouteInfo()
+ {
++  if (m_mobile.hideRoute)
++    m_mobile.hideRoute();
+   if (m_routeInfo)
+     m_routeInfo->hide();
+ }
+ 
++bool DrawWidget::CanFollowRoute() const
++{
++  auto const points = m_framework.GetRoutingManager().GetRoutePoints();
++  return points.size() >= 2 && (points.front().m_isMyPosition || points.back().m_isMyPosition);
++}
++
++void DrawWidget::RouteFromCurrentPlace(RouteMarkType type)
++{
++  if (!m_framework.HasPlacePageInfo())
++    return;
++  m2::PointD const pt = m_framework.GetCurrentPlacePageInfo().GetMercator();
++  m_framework.DeactivateMapSelection();
++  SetRoutePointAddMode(type);
++  SubmitRoutingPoint(pt, true /* pointIsMercator */);
++}
++
++void DrawWidget::ToggleBookmarkForCurrentPlace()
++{
++  if (!m_framework.HasPlacePageInfo())
++    return;
++  place_page::Info const & info = m_framework.GetCurrentPlacePageInfo();
++  auto & manager = m_framework.GetBookmarkManager();
++  if (info.IsBookmark())
++  {
++    manager.GetEditSession().DeleteBookmark(info.GetBookmarkId());
++  }
++  else
++  {
++    kml::BookmarkData data;
++    data.m_color.m_predefinedColor = kml::PredefinedColor::Red;
++    data.m_point = info.GetMercator();
++    if (!info.GetTitle().empty())
++      kml::SetDefaultStr(data.m_name, info.GetTitle());
++    manager.GetEditSession().CreateBookmark(std::move(data), manager.LastEditedBMCategory());
++  }
++  m_framework.UpdatePlacePageInfoForCurrentSelection();
++  if (m_framework.HasPlacePageInfo())
++    ShowPlacePage();
++}
++
++void DrawWidget::EditCurrentPlace()
++{
++  if (!m_framework.HasPlacePageInfo())
++    return;
++  place_page::Info const & info = m_framework.GetCurrentPlacePageInfo();
++  osm::EditableMapObject emo;
++  if (!m_framework.GetEditableMapObject(info.GetID(), emo))
++  {
++    LOG(LERROR, ("Error while trying to edit feature."));
++    return;
++  }
++  FeatureID const id = info.GetID();
++  EditorDialog dlg(this, emo);
++  int const result = dlg.exec();
++  if (result == QDialog::Accepted)
++  {
++    m_framework.SaveEditedMapObject(emo);
++    m_framework.UpdatePlacePageInfoForCurrentSelection();
++  }
++  else if (result == QDialogButtonBox::DestructiveRole)
++  {
++    m_framework.DeleteFeature(id);
++  }
++}
++
++void DrawWidget::CloseCurrentPlace()
++{
++  m_framework.DeactivateMapSelection();
++  if (m_mobile.hidePlace)
++    m_mobile.hidePlace();
++}
++
+ void DrawWidget::PlaceRouteInfo()
+ {
+   if (!m_routeInfo)
+diff --git a/qt/draw_widget.hpp b/qt/draw_widget.hpp
+index 1d4c24a..ea66fc9 100644
+--- a/qt/draw_widget.hpp
++++ b/qt/draw_widget.hpp
+@@ -5,9 +5,11 @@
+ #include "qt/ruler.hpp"
+ #include "qt/selection.hpp"
+ 
++#include "map/place_page_info.hpp"
+ #include "map/routing_manager.hpp"
+ 
+ #include "search/result.hpp"
++#include "search/reverse_geocoder.hpp"
+ 
+ #include "indexer/map_style.hpp"
+ 
+@@ -15,6 +17,7 @@
+ 
+ class QLabel;
+ 
++#include <functional>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -71,6 +74,22 @@ public:
+   void SetMapStyleToDefault();
+   void SetMapStyleToVehicle();
+ 
++  // ut-comaps phone UI: when set, the place page and the route summary are
++  // handed to these instead of the desktop dialog / label.
++  struct MobileSinks
++  {
++    std::function<void(place_page::Info const &, search::ReverseGeocoder::Address const &)> showPlace;
++    std::function<void()> hidePlace;
++    std::function<void(QString const & primary, QString const & secondary, bool error, bool canStart)> showRoute;
++    std::function<void()> hideRoute;
++  };
++  void SetMobileSinks(MobileSinks sinks) { m_mobile = std::move(sinks); }
++  // Actions of the phone place page; all act on the current selection.
++  void RouteFromCurrentPlace(RouteMarkType type);
++  void ToggleBookmarkForCurrentPlace();
++  void EditCurrentPlace();
++  void CloseCurrentPlace();
++
+ protected:
+   /// @name Overriden from MapWidget.
+   //@{
+@@ -95,6 +114,8 @@ private:
+   void HideRouteInfo();
+   void PlaceRouteInfo();
+   QLabel * m_routeInfo = nullptr;
++  MobileSinks m_mobile;
++  bool CanFollowRoute() const;
+ 
+   void SubmitFakeLocationPoint(m2::PointD const & pt);
+   void SubmitRulerPoint(m2::PointD const & pt);
+diff --git a/qt/mainwindow.cpp b/qt/mainwindow.cpp
+index 9aaf07c..5120c5c 100644
+--- a/qt/mainwindow.cpp
++++ b/qt/mainwindow.cpp
+@@ -11,6 +11,10 @@
+ #include "qt/routing_settings_dialog.hpp"
+ #include "qt/screenshoter.hpp"
+ #include "qt/search_panel.hpp"
++#include "qt/ut_mobile_ui.hpp"
++#include "qt/ut_test_hook.hpp"
++
++#include "geometry/mercator.hpp"
+ 
+ #include "platform/platform.hpp"
+ #include "platform/settings.hpp"
+@@ -122,7 +126,9 @@ MainWindow::MainWindow(Framework & framework, std::unique_ptr<ScreenshotParams>
+   int const height = m_screenshotMode ? static_cast<int>(screenshotParams->m_height) : 0;
+   m_pDrawWidget = new DrawWidget(framework, std::move(screenshotParams), this);
+ 
+-  setCentralWidget(m_pDrawWidget);
++  // ut-comaps: the map sits in a container that also holds the phone controls.
++  m_mobileUi = new mobile::MapUi(m_pDrawWidget, this);
++  setCentralWidget(m_mobileUi);
+ 
+   if (m_screenshotMode)
+   {
+@@ -177,6 +183,8 @@ MainWindow::MainWindow(Framework & framework, std::unique_ptr<ScreenshotParams>
+   }
+ #endif
+ 
++  SetupMobileUi();
++
+   // Always show on full screen.
+   showMaximized();
+ 
+@@ -245,6 +253,9 @@ bool MainWindow::nativeEvent(QByteArray const & eventType, void * message, qintp
+ 
+ void MainWindow::LocationStateModeChanged(location::EMyPositionMode mode)
+ {
++  if (m_mobileUi)
++    m_mobileUi->SetLocationMode(mode);
++
+   if (mode == location::PendingPosition)
+   {
+     m_locationService->Start();
+@@ -465,6 +476,7 @@ void MainWindow::CreateNavigationBar()
+     pToolBar->setVisible(false);
+ 
+   addToolBar(Qt::RightToolBarArea, pToolBar);
++  m_navToolBar = pToolBar;
+ }
+ 
+ Framework & MainWindow::GetFramework() const
+@@ -540,10 +552,17 @@ void MainWindow::CreateCountryStatusControls()
+     }
+   };
+ 
+-  GetFramework().SetCurrentCountryChangedListener(OnCountryChanged);
++  // ut-comaps: the phone UI shows the state as a banner over the map.
++  auto const OnCountryChangedForward = [this, OnCountryChanged](storage::CountryId const & countryId)
++  {
++    OnCountryChanged(countryId);
++    ForwardCountryStatus();
++  };
++
++  GetFramework().SetCurrentCountryChangedListener(OnCountryChangedForward);
+ 
+   GetFramework().GetStorage().Subscribe(
+-      [this, onChanged = std::move(OnCountryChanged)](storage::CountryId const & countryId)
++      [this, onChanged = OnCountryChangedForward](storage::CountryId const & countryId)
+   {
+     // Storage also calls notifications for parents, but we are interested in leafs only.
+     if (GetFramework().GetStorage().IsLeaf(countryId))
+@@ -553,6 +572,14 @@ void MainWindow::CreateCountryStatusControls()
+     std::stringstream str;
+     str << "Downloading (" << countryId << ") " << progress.m_bytesDownloaded * 100 / progress.m_bytesTotal << "% (click to cancel)";
+     m_cancelDownloadButton->setText(str.str().c_str());
++    if (m_mobileUi && countryId == m_lastCountry && progress.m_bytesTotal > 0)
++    {
++      QString const name = QString::fromStdString(GetFramework().GetStorage().GetNodeLocalName(countryId));
++      m_mobileUi->SetCountryState(mobile::MapUi::CountryState::Downloading,
++                                  mobile::Tr("%1: %2% (tap to cancel)", "%1: %2 % (Tippen zum Abbrechen)")
++                                      .arg(name)
++                                      .arg(progress.m_bytesDownloaded * 100 / progress.m_bytesTotal));
++    }
+   });
+ }
+ 
+@@ -572,6 +599,8 @@ void MainWindow::OnLocationError(location::TLocationError errorCode)
+   {
+     if (m_pDrawWidget && m_pMyPositionAction)
+       m_pMyPositionAction->setEnabled(false);
++    if (m_mobileUi)
++      m_mobileUi->SetLocationEnabled(false);
+     break;
+   }
+ 
+@@ -915,6 +944,8 @@ void MainWindow::SetMapMode(MapMode const mapMode)
+   else
+     m_publicTransportMapMode->setMainIcon(QIcon(":/navig64/mode_public-transport.png"));
+ #endif  // BUILD_DESIGNER
++  if (m_mobileUi)
++    m_mobileUi->RefreshModes();
+ }
+ 
+ void MainWindow::OnMapModeChange(MapMode const mapMode)
+@@ -922,6 +953,103 @@ void MainWindow::OnMapModeChange(MapMode const mapMode)
+   SetMapMode(mapMode);
+ }
+ 
++void MainWindow::SetupMobileUi()
++{
++  if (m_screenshotMode || !m_mobileUi)
++    return;
++
++  // The desktop controls do not fit a phone; the floating controls replace them.
++  menuBar()->hide();
++  if (m_navToolBar)
++    m_navToolBar->hide();
++  m_downloadButton->hide();
++  m_retryButton->hide();
++  m_cancelDownloadButton->hide();
++
++  mobile::MapUi::Actions a;
++  a.setMapMode = [this](MapMode mode) { SetMapMode(mode); };
++  a.myPosition = [this] { m_pDrawWidget->GetFramework().SwitchMyPositionNextMode(); };
++#ifndef NO_DOWNLOADER
++  a.showDownloader = [this] { ShowUpdateDialog(); };
++#endif
++  a.showBookmarks = [this] { OnBookmarksAction(); };
++  a.showPreferences = [this] { OnPreferences(); };
++  a.showRoutingSettings = [this] { OnRoutingSettings(); };
++  a.showAbout = [this] { OnAbout(); };
++  a.osmLogin = [this] { OnLoginMenuItem(); };
++  a.createFeature = [this]
++  {
++    // Like the desktop button: the map center becomes the new place.
++    m_pDrawWidget->CreateFeature();
++  };
++  a.ruler = [this](bool on)
++  {
++    m_rulerAction->setChecked(on);
++    m_pDrawWidget->SetRuler(on);
++  };
++  a.download = [this] { OnDownloadClicked(); };
++  a.retryDownload = [this] { OnRetryDownloadClicked(); };
++  a.cancelDownload = [this] { OnCancelDownloadClicked(); };
++  a.followRoute = [this] { OnFollowRoute(); };
++  a.clearRoute = [this] { OnClearRoute(); };
++  m_mobileUi->Init(std::move(a));
++
++  DrawWidget::MobileSinks sinks;
++  sinks.showPlace = [this](place_page::Info const & info, search::ReverseGeocoder::Address const & address)
++  { m_mobileUi->ShowPlace(info, address); };
++  sinks.hidePlace = [this] { m_mobileUi->HidePlace(); };
++  sinks.showRoute = [this](QString const & primary, QString const & secondary, bool error, bool canStart)
++  { m_mobileUi->ShowRoute(primary, secondary, error, canStart); };
++  sinks.hideRoute = [this] { m_mobileUi->HideRoute(); };
++  m_pDrawWidget->SetMobileSinks(std::move(sinks));
++
++  // UI tests on the phone (only with UT_COMAPS_TEST set): "center <lat> <lon> [zoom]".
++  ut_test::RegisterCommand("center", [this](QStringList const & args)
++  {
++    GetFramework().SetViewportCenter(mercator::FromLatLon(args.value(0).toDouble(), args.value(1).toDouble()),
++                                     args.value(2, "12").toInt(), false /* isAnim */);
++  });
++  ut_test::RegisterCommand("search", [this](QStringList const & args)
++  {
++    m_mobileUi->OpenSearch();
++    Q_UNUSED(args);
++  });
++}
++
++void MainWindow::ForwardCountryStatus()
++{
++  if (!m_mobileUi || m_screenshotMode)
++    return;
++  using State = mobile::MapUi::CountryState;
++  State state = State::None;
++  QString text;
++  QString const name = m_lastCountry.empty()
++                           ? QString()
++                           : QString::fromStdString(GetFramework().GetStorage().GetNodeLocalName(m_lastCountry));
++  if (m_downloadButton->isVisible() || m_downloadButton->isVisibleTo(this))
++  {
++    state = State::Download;
++    std::string units;
++    size_t size = 0;
++    FormatMapSize(GetFramework().GetStorage().CountrySizeInBytes(m_lastCountry).second, units, size);
++    text = mobile::Tr("Download %1 (%2 %3)", "%1 herunterladen (%2 %3)").arg(name).arg(size).arg(units.c_str());
++  }
++  else if (m_cancelDownloadButton->isVisibleTo(this))
++  {
++    state = State::Downloading;
++    text = mobile::Tr("Downloading %1 … (tap to cancel)", "%1 wird geladen … (Tippen zum Abbrechen)").arg(name);
++  }
++  else if (m_retryButton->isVisibleTo(this))
++  {
++    state = State::Retry;
++    text = mobile::Tr("Retry download of %1", "%1 erneut herunterladen").arg(name);
++  }
++  m_downloadButton->hide();
++  m_retryButton->hide();
++  m_cancelDownloadButton->hide();
++  m_mobileUi->SetCountryState(state, text);
++}
++
+ void MainWindow::OnWalkingMapModeOptionChange(int8_t const index)
+ {
+   // Do nothing (yet)
+diff --git a/qt/mainwindow.hpp b/qt/mainwindow.hpp
+index 0aae592..c2da6f2 100644
+--- a/qt/mainwindow.hpp
++++ b/qt/mainwindow.hpp
+@@ -20,6 +20,7 @@ class Framework;
+ class QDockWidget;
+ class QLabel;
+ class QPushButton;
++class QToolBar;
+ 
+ namespace search
+ {
+@@ -28,6 +29,10 @@ class Result;
+ 
+ namespace qt
+ {
++namespace mobile
++{
++class MapUi;
++}
+ class DrawWidget;
+ class PopupMenuHolder;
+ struct ScreenshotParams;
+@@ -37,6 +42,9 @@ class MainWindow
+   , location::LocationObserver
+ {
+   DrawWidget * m_pDrawWidget = nullptr;
++  // ut-comaps: phone user interface (floating controls over the map).
++  mobile::MapUi * m_mobileUi = nullptr;
++  QToolBar * m_navToolBar = nullptr;
+   // TODO(mgsergio): Make indexing more informative.
+   std::array<QDockWidget *, 1> m_Docks;
+ 
+@@ -94,6 +102,8 @@ protected:
+   void CreateNavigationBar();
+   void CreateSearchBarAndPanel();
+   void CreateCountryStatusControls();
++  void SetupMobileUi();
++  void ForwardCountryStatus();
+ 
+   void SetMapMode(MapMode mapMode);
+ 
+diff --git a/qt/search_panel.cpp b/qt/search_panel.cpp
+index 8e08b5e..f527675 100644
+--- a/qt/search_panel.cpp
++++ b/qt/search_panel.cpp
+@@ -1,5 +1,6 @@
+ #include "qt/search_panel.hpp"
+ #include "qt/draw_widget.hpp"
++#include "qt/ut_mobile_ui.hpp"
+ 
+ #include "search/search_params.hpp"
+ 
+@@ -12,99 +13,232 @@
+ 
+ #include <QtCore/QTimer>
+ #include <QtGui/QGuiApplication>
+-#include <QtWidgets/QButtonGroup>
++#include <QtGui/QPainter>
+ #include <QtWidgets/QCheckBox>
+-#include <QtWidgets/QGroupBox>
+ #include <QtWidgets/QHBoxLayout>
+-#include <QtWidgets/QHeaderView>
+ #include <QtWidgets/QLabel>
+ #include <QtWidgets/QLineEdit>
++#include <QtWidgets/QListWidget>
+ #include <QtWidgets/QPushButton>
+-#include <QtWidgets/QRadioButton>
+-#include <QtWidgets/QTableWidget>
+ #include <QtWidgets/QVBoxLayout>
+ 
+ namespace qt
+ {
++namespace
++{
++using mobile::CurrentStyle;
++using mobile::Tr;
++
++// Category shortcuts shown while the search field is empty: (English, German).
++struct Category
++{
++  char const * en;
++  char const * de;
++  char const * icon;
++};
++Category const kCategories[] = {
++    {"Restaurant", "Restaurant", "cuisine"},   {"Cafe", "Café", "cuisine"},
++    {"Supermarket", "Supermarkt", "pin"},      {"Gas station", "Tankstelle", "driving"},
++    {"Parking", "Parkplatz", "driving"},       {"Hotel", "Hotel", "pin"},
++    {"ATM", "Geldautomat", "info"},            {"Pharmacy", "Apotheke", "info"},
++    {"Hospital", "Krankenhaus", "info"},       {"Toilets", "Toiletten", "info"},
++    {"Bus stop", "Bushaltestelle", "publictransport"},
++};
++
++QLabel * RowLabel(QString const & text, int px, QColor const & color, bool bold = false)
++{
++  auto * label = new QLabel(text);
++  label->setTextFormat(Qt::RichText);
++  label->setWordWrap(true);
++  QFont f = label->font();
++  f.setPixelSize(px);
++  f.setBold(bold);
++  label->setFont(f);
++  label->setStyleSheet(QString("color: %1; background: transparent;").arg(color.name()));
++  return label;
++}
++
++// One list row: icon, title, up to two lines below, distance on the right.
++QWidget * MakeRow(QString const & icon, QString const & titleHtml, QString const & line1, QString const & line2,
++                  QString const & right, bool boldTitle)
++{
++  auto const & st = CurrentStyle();
++  auto * row = new QWidget();
++  row->setAttribute(Qt::WA_TransparentForMouseEvents);
++  auto * h = new QHBoxLayout(row);
++  h->setContentsMargins(16, 10, 16, 10);
++  h->setSpacing(14);
++  auto * iv = new mobile::IconView(icon, 22);
++  iv->SetColor(icon == "circle" ? st.locationBlue : (boldTitle ? st.text : st.secondary));
++  h->addWidget(iv, 0, boldTitle ? Qt::AlignTop : Qt::AlignVCenter);
++  auto * v = new QVBoxLayout();
++  v->setSpacing(1);
++  v->addWidget(RowLabel(titleHtml, boldTitle ? 18 : 17, st.text, boldTitle));
++  if (!line1.isEmpty())
++    v->addWidget(RowLabel(line1.toHtmlEscaped(), 14, st.text));
++  if (!line2.isEmpty())
++    v->addWidget(RowLabel(line2.toHtmlEscaped(), 14, st.secondary));
++  h->addLayout(v, 1);
++  if (!right.isEmpty())
++  {
++    QLabel * r = RowLabel(right.toHtmlEscaped(), 14, st.secondary);
++    r->setWordWrap(false);
++    h->addWidget(r, 0, Qt::AlignBottom);
++  }
++  return row;
++}
+ 
+-constexpr int kColType = 0;
+-constexpr int kColName = 1;
+-constexpr int kColAddress = 2;
+-constexpr int kColDistance = 3;
+-constexpr int kColCount = 4;
++QIcon ClearIcon()
++{
++  auto const & st = CurrentStyle();
++  QPixmap pm(64, 64);
++  pm.fill(Qt::transparent);
++  QPainter p(&pm);
++  p.setRenderHint(QPainter::Antialiasing);
++  p.setPen(Qt::NoPen);
++  p.setBrush(st.secondary);
++  p.drawEllipse(QRectF(4, 4, 56, 56));
++  mobile::PaintIcon(p, "close", QRectF(18, 18, 28, 28), st.dark ? QColor(0x1c, 0x1c, 0x1e) : Qt::white);
++  return QIcon(pm);
++}
++}  // namespace
+ 
+ SearchPanel::SearchPanel(DrawWidget * drawWidget, QWidget * parent)
+   : QWidget(parent)
+   , m_pDrawWidget(drawWidget)
+-  , m_clearIcon(":/ui/x.png")
++  , m_clearIcon(ClearIcon())
+   , m_busyIcon(":/ui/busy.png")
+   , m_mode(search::Mode::Everywhere)
+   , m_timestamp(0)
+ {
+-  m_pEditor = new QLineEdit(this);
++  auto const & st = CurrentStyle();
++  setObjectName("utSearchPanel");
++
++  // Search field: magnifier, text, clear button in a rounded box, then "Cancel".
++  auto * field = new QWidget(this);
++  field->setObjectName("utSearchField");
++  field->setAttribute(Qt::WA_StyledBackground);
++  field->setStyleSheet(QString("QWidget#utSearchField { background: %1; border-radius: 12px; }").arg(st.field.name()));
++  auto * fieldLayout = new QHBoxLayout(field);
++  fieldLayout->setContentsMargins(12, 0, 6, 0);
++  fieldLayout->setSpacing(8);
++  auto * magnifier = new mobile::IconView("search", 20, field);
++  magnifier->SetColor(st.secondary);
++  fieldLayout->addWidget(magnifier);
++
++  m_pEditor = new QLineEdit(field);
++  m_pEditor->setObjectName("utSearchEdit");
++  m_pEditor->setPlaceholderText(Tr("Search", "Suche"));
++  m_pEditor->setFrame(false);
++  m_pEditor->setStyleSheet(QString("QLineEdit { background: transparent; border: none; color: %1; font-size: 18px;"
++                                   " padding: 0; min-height: 44px; }")
++                               .arg(st.text.name()));
+   connect(m_pEditor, &QLineEdit::textChanged, this, &SearchPanel::OnSearchTextChanged);
++  // Typing ends a category request.
++  connect(m_pEditor, &QLineEdit::textEdited, this, [this]
++  {
++    QSignalBlocker block(m_isCategory);
++    m_isCategory->setChecked(false);
++  });
++  fieldLayout->addWidget(m_pEditor, 1);
+ 
+-  m_pTable = new QTableWidget(0, kColCount, this);
+-  m_pTable->setFocusPolicy(Qt::NoFocus);
+-  m_pTable->setAlternatingRowColors(true);
+-  m_pTable->setShowGrid(false);
+-  m_pTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+-  m_pTable->verticalHeader()->setVisible(false);
+-  m_pTable->horizontalHeader()->setVisible(false);
+-  m_pTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+-
+-  connect(m_pTable, &QTableWidget::cellClicked, this, &SearchPanel::OnSearchPanelItemClicked);
+-
+-  m_pClearButton = new QPushButton(this);
+-  connect(m_pClearButton, &QAbstractButton::pressed, this, &SearchPanel::OnClearButton);
++  m_pClearButton = new QPushButton(field);
++  m_pClearButton->setObjectName("utSearchClear");
++  m_pClearButton->setFlat(true);
++  m_pClearButton->setIconSize(QSize(20, 20));
++  m_pClearButton->setFixedSize(34, 34);
++  m_pClearButton->setStyleSheet("QPushButton { background: transparent; border: none; }");
++  connect(m_pClearButton, &QAbstractButton::clicked, this, &SearchPanel::OnClearButton);
+   m_pClearButton->setVisible(false);
+   m_pClearButton->setFocusPolicy(Qt::NoFocus);
++  fieldLayout->addWidget(m_pClearButton);
+   m_pAnimationTimer = new QTimer(this);
+   connect(m_pAnimationTimer, &QTimer::timeout, this, &SearchPanel::OnAnimationTimer);
+ 
+-  QButtonGroup * searchModeButtons = new QButtonGroup(this);
+-  QGroupBox * groupBox = new QGroupBox();
+-  QHBoxLayout * modeLayout = new QHBoxLayout();
+-  QRadioButton * buttonE = new QRadioButton(tr("Everywhere"));
+-  modeLayout->addWidget(buttonE);
+-  searchModeButtons->addButton(buttonE, static_cast<int>(search::Mode::Everywhere));
+-  QRadioButton * buttonV = new QRadioButton(tr("Viewport"));
+-  modeLayout->addWidget(buttonV);
+-  searchModeButtons->addButton(buttonV, static_cast<int>(search::Mode::Viewport));
+-  groupBox->setLayout(modeLayout);
+-  groupBox->setFlat(true);
+-  searchModeButtons->button(static_cast<int>(search::Mode::Everywhere))->setChecked(true);
+-  connect(searchModeButtons, SIGNAL(idClicked(int)), this, SLOT(OnSearchModeChanged(int)));
+-
+-  m_isCategory = new QCheckBox(tr("Category request"));
++  auto * cancel = new QPushButton(Tr("Cancel", "Abbrechen"), this);
++  cancel->setObjectName("utSearchCancel");
++  cancel->setFlat(true);
++  cancel->setFocusPolicy(Qt::NoFocus);
++  cancel->setCursor(Qt::PointingHandCursor);
++  cancel->setStyleSheet(QString("QPushButton { background: transparent; border: none; color: %1; font-size: 17px;"
++                                " padding: 8px 4px; }")
++                            .arg(st.accent.name()));
++  connect(cancel, &QAbstractButton::clicked, this, [this]
++  {
++    m_pEditor->setText({});
++    emit CloseRequested();
++  });
++
++  // Not shown: category requests are started from the category list.
++  m_isCategory = new QCheckBox(this);
++  m_isCategory->setVisible(false);
+   m_isCategory->setCheckState(Qt::Unchecked);
+   connect(m_isCategory, &QCheckBox::stateChanged, std::bind(&SearchPanel::RunSearch, this));
+ 
+-  QHBoxLayout * requestLayout = new QHBoxLayout();
+-  requestLayout->addWidget(m_pEditor);
+-  requestLayout->addWidget(m_pClearButton);
+-  QVBoxLayout * verticalLayout = new QVBoxLayout();
+-  verticalLayout->addWidget(groupBox);
+-  verticalLayout->addWidget(m_isCategory);
+-  verticalLayout->addLayout(requestLayout);
+-  verticalLayout->addWidget(m_pTable);
+-  setLayout(verticalLayout);
++  m_pList = new QListWidget(this);
++  m_pList->setObjectName("utSearchList");
++  m_pList->setFocusPolicy(Qt::NoFocus);
++  m_pList->setFrameShape(QFrame::NoFrame);
++  m_pList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
++  m_pList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
++  m_pList->setSelectionMode(QAbstractItemView::NoSelection);
++  m_pList->setStyleSheet(QString("QListWidget { background: transparent; border: none; }"
++                                 "QListWidget::item { border-bottom: 1px solid %1; padding: 0; }"
++                                 "QListWidget::item:selected, QListWidget::item:hover { background: transparent; }")
++                             .arg(st.separator.name()));
++  mobile::EnableFingerScrolling(m_pList->viewport());
++  connect(m_pList, &QListWidget::itemClicked, this, &SearchPanel::OnSearchPanelItemClicked);
++
++  auto * top = new QHBoxLayout();
++  top->setContentsMargins(12, 8, 12, 8);
++  top->setSpacing(10);
++  top->addWidget(field, 1);
++  top->addWidget(cancel);
++
++  auto * verticalLayout = new QVBoxLayout(this);
++  verticalLayout->setContentsMargins(0, 0, 0, 0);
++  verticalLayout->setSpacing(0);
++  verticalLayout->addLayout(top);
++  verticalLayout->addWidget(m_pList, 1);
++
++  ShowCategories();
+ }
+ 
+-namespace
++void SearchPanel::FocusInput()
+ {
+-QTableWidgetItem * CreateItem(std::string const & s)
++  m_pEditor->setFocus(Qt::OtherFocusReason);
++  QGuiApplication::inputMethod()->show();
++}
++
++void SearchPanel::ShowCategories()
+ {
+-  QTableWidgetItem * item = new QTableWidgetItem(QString::fromStdString(s));
+-  item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+-  return item;
++  ClearTable();
++  m_showingCategories = true;
++  auto * header = new QListWidgetItem(m_pList);
++  header->setFlags(Qt::NoItemFlags);
++  QWidget * headerRow = new QWidget();
++  {
++    auto * h = new QHBoxLayout(headerRow);
++    h->setContentsMargins(16, 14, 16, 6);
++    h->addWidget(RowLabel(Tr("CATEGORIES", "KATEGORIEN"), 13, CurrentStyle().secondary));
++  }
++  header->setSizeHint(headerRow->sizeHint());
++  m_pList->setItemWidget(header, headerRow);
++  for (auto const & c : kCategories)
++  {
++    auto * item = new QListWidgetItem(m_pList);
++    QString const name = Tr(c.en, c.de);
++    item->setData(Qt::UserRole, name);
++    QWidget * row = MakeRow(c.icon, name.toHtmlEscaped(), {}, {}, {}, false);
++    item->setSizeHint(QSize(100, std::max(row->sizeHint().height(), 50)));
++    m_pList->setItemWidget(item, row);
++  }
+ }
+-}  // namespace
+ 
+ void SearchPanel::ClearTable()
+ {
+-  m_pTable->clear();
+-  m_pTable->setRowCount(0);
++  m_pList->clear();
++  m_showingCategories = false;
+ }
+ 
+ void SearchPanel::ClearResults()
+@@ -119,7 +253,6 @@ void SearchPanel::StartBusyIndicator()
+   if (!m_pAnimationTimer->isActive())
+     m_pAnimationTimer->start(200 /* milliseconds */);
+ 
+-  m_pClearButton->setFlat(true);
+   m_pClearButton->setVisible(true);
+ }
+ 
+@@ -140,6 +273,7 @@ void SearchPanel::OnSearchResults(uint64_t timestamp, search::Results results)
+   m_results = std::move(results);
+   ClearTable();
+ 
++  QString const highlight = CurrentStyle().accent.name();
+   for (auto const & res : m_results)
+   {
+     QString const name = QString::fromStdString(res.GetString());
+@@ -148,34 +282,37 @@ void SearchPanel::OnSearchResults(uint64_t timestamp, search::Results results)
+     for (size_t r = 0; r < res.GetHighlightRangesCount(); ++r)
+     {
+       std::pair<uint16_t, uint16_t> const & range = res.GetHighlightRange(r);
+-      strHigh.append(name.mid(pos, range.first - pos));
+-      strHigh.append("<font color=\"green\">");
+-      strHigh.append(name.mid(range.first, range.second));
+-      strHigh.append("</font>");
++      strHigh.append(name.mid(pos, range.first - pos).toHtmlEscaped());
++      strHigh.append("<span style=\"color:" + highlight + "\">");
++      strHigh.append(name.mid(range.first, range.second).toHtmlEscaped());
++      strHigh.append("</span>");
+ 
+       pos = range.first + range.second;
+     }
+-    strHigh.append(name.mid(pos));
+-
+-    int const rowCount = m_pTable->rowCount();
+-    m_pTable->insertRow(rowCount);
+-    m_pTable->setCellWidget(rowCount, kColName, new QLabel(strHigh));
+-    m_pTable->setItem(rowCount, kColAddress, CreateItem(res.GetAddress()));
++    strHigh.append(name.mid(pos).toHtmlEscaped());
+ 
+-    bool showDistance = true;
++    QString type, address, distance;
++    bool suggestion = false;
+     switch (res.GetResultType())
+     {
+     case search::Result::Type::SuggestFromFeature:
+-    case search::Result::Type::PureSuggest: showDistance = false; break;
+-    case search::Result::Type::Feature:
+-    case search::Result::Type::Postcode:
+-      m_pTable->setItem(rowCount, kColType, CreateItem(res.GetLocalizedFeatureType()));
++    case search::Result::Type::PureSuggest:
++      suggestion = true;
+       break;
+-    case search::Result::Type::LatLon: m_pTable->setItem(rowCount, 0, CreateItem("LatLon")); break;
++    case search::Result::Type::Feature:
++    case search::Result::Type::Postcode: type = QString::fromStdString(res.GetLocalizedFeatureType()); break;
++    case search::Result::Type::LatLon: type = "LatLon"; break;
++    }
++    if (!suggestion)
++    {
++      address = QString::fromStdString(res.GetAddress());
++      distance = QString::fromStdString(m_pDrawWidget->GetDistance(res));
+     }
+ 
+-    if (showDistance)
+-      m_pTable->setItem(rowCount, kColDistance, CreateItem(m_pDrawWidget->GetDistance(res)));
++    auto * item = new QListWidgetItem(m_pList);
++    QWidget * row = MakeRow(suggestion ? "search" : "circle", strHigh, type, address, distance, !suggestion);
++    item->setSizeHint(QSize(100, std::max(row->sizeHint().height(), suggestion ? 50 : 64)));
++    m_pList->setItemWidget(item, row);
+   }
+ 
+   GetFramework().FillSearchResultsMarks(true /* clear */, m_results);
+@@ -248,6 +385,8 @@ void SearchPanel::OnSearchTextChanged(QString const & str)
+ 
+     // hide X button
+     m_pClearButton->setVisible(false);
++    StopBusyIndicator();
++    ShowCategories();
+     return;
+   }
+ 
+@@ -309,9 +448,25 @@ void SearchPanel::RunSearch()
+   m_pEditor->setText(text);
+ }
+ 
+-void SearchPanel::OnSearchPanelItemClicked(int row, int)
++void SearchPanel::OnSearchPanelItemClicked(QListWidgetItem * item)
+ {
+-  ASSERT_EQUAL(m_results.GetCount(), static_cast<size_t>(m_pTable->rowCount()), ());
++  if (m_showingCategories)
++  {
++    QString const category = item->data(Qt::UserRole).toString();
++    if (category.isEmpty())
++      return;
++    {
++      QSignalBlocker block(m_isCategory);
++      m_isCategory->setChecked(true);
++    }
++    // CoMaps' category queries end with a space.
++    m_pEditor->setText(category + ' ');
++    return;
++  }
++
++  int const row = m_pList->row(item);
++  if (row < 0 || static_cast<size_t>(row) >= m_results.GetCount())
++    return;
+ 
+   if (m_results[row].IsSuggest())
+   {
+@@ -323,6 +478,7 @@ void SearchPanel::OnSearchPanelItemClicked(int row, int)
+   {
+     // center viewport on clicked item
+     GetFramework().ShowSearchResult(m_results[row]);
++    emit ResultActivated();
+   }
+ }
+ 
+diff --git a/qt/search_panel.hpp b/qt/search_panel.hpp
+index 70355ac..3e40b3d 100644
+--- a/qt/search_panel.hpp
++++ b/qt/search_panel.hpp
+@@ -11,8 +11,9 @@
+ 
+ class QCheckBox;
+ class QLineEdit;
++class QListWidget;
++class QListWidgetItem;
+ class QPushButton;
+-class QTableWidget;
+ class QTimer;
+ 
+ class Framework;
+@@ -21,10 +22,13 @@ namespace qt
+ {
+ class DrawWidget;
+ 
++// ut-comaps: full screen search page in the style of the CoMaps iPhone app:
++// a rounded search field with "Cancel", categories while the field is empty,
++// results as a list (name, type, address, distance).
+ class SearchPanel : public QWidget
+ {
+   DrawWidget * m_pDrawWidget;
+-  QTableWidget * m_pTable;
++  QListWidget * m_pList;
+   QLineEdit * m_pEditor;
+   QPushButton * m_pClearButton;
+   QTimer * m_pAnimationTimer;
+@@ -34,6 +38,7 @@ class SearchPanel : public QWidget
+   QPixmap m_busyIcon;
+ 
+   search::Results m_results;
++  bool m_showingCategories = false;
+ 
+   search::Mode m_mode;
+   uint64_t m_timestamp;
+@@ -47,19 +52,26 @@ public:
+ 
+   static std::string GetCurrentInputLocale();
+ 
++  void FocusInput();
++
++signals:
++  void CloseRequested();
++  void ResultActivated();
++
+ private:
+   virtual void hideEvent(QHideEvent *);
+ 
+   void RunSearch();
+   void ClearTable();
+   void ClearResults();
++  void ShowCategories();
+ 
+   void StartBusyIndicator();
+   void StopBusyIndicator();
+ 
+ private slots:
+   void OnSearchModeChanged(int mode);
+-  void OnSearchPanelItemClicked(int row, int column);
++  void OnSearchPanelItemClicked(QListWidgetItem * item);
+   void OnSearchTextChanged(QString const & str);
+   void OnSearchResults(uint64_t timestamp, search::Results results);
+ 
+diff --git a/qt/ut_icons_data.hpp b/qt/ut_icons_data.hpp
+new file mode 100644
+index 0000000..663edbc
+--- /dev/null
++++ b/qt/ut_icons_data.hpp
+@@ -0,0 +1,17 @@
++// Generated by extract_icons.py from iphone/Maps/Images.xcassets/Interface/Symbols
++// (CoMaps, Apache-2.0): the "Regular-S" glyph of each symbol template.
++#pragma once
++
++namespace ut_icons
++{
++struct Glyph { char const * path; double x, y, w, h; };
++
++inline Glyph const k_walking = {"M31.5808-18.2346L39.5508-7.65902L39.5041-7.3879C39.436-7.00146 39.3167-6.63679 39.1545-6.29976C39.0483-5.73134 38.8221-5.1753 38.4684-4.67031L25.7103 13.5502C24.3868 15.4403 21.7818 15.8996 19.8918 14.5762C18.0018 13.2528 17.5425 10.6478 18.8658 8.75778L30.8736-8.3909C30.8054-8.75602 30.7852-9.13624 30.8192-9.52435L31.5808-18.2346ZM43.2531-64.0766C45.4407-63.3674 47.2196-62.2237 48.4248-60.7529C48.6997-60.4879 48.9424-60.1805 49.1428-59.8334L56.3207-47.3997L71.2582-47.3989C73.5655-47.3989 75.436-45.5285 75.436-43.2211C75.436-40.9139 73.5655-39.0435 71.2582-39.0435L54.0252-39.0435C52.546-39.0435 51.2462-39.8123 50.5038-40.9721C50.2958-41.1967 50.1097-41.4478 49.9503-41.7239L48.2995-44.5828L46.1983-32.6637L44.4208-23.8135L50.8509-12.8247C51.221-12.154 52.1136-10.4205 52.4043-8.7719L55.7932 10.4282C56.1938 12.7005 54.6766 14.8673 52.4043 15.2679C50.1321 15.6685 47.9653 14.1513 47.5647 11.8791L44.699-4.36712L43.9946-7.81241C43.9239-8.15645 43.7993-8.48717 43.6255-8.79232C42.6922-10.4211 41.8517-11.7632 41.1021-12.8176L40.5797-13.4968L40.5575-13.3679L34.8986-20.8757L34.9142-20.8724L29.1041-28.4358C28.8732-28.711 28.7321-28.9447 28.6806-29.137C27.616-30.8292 27.1519-32.9082 27.5266-35.0335L30.9276-54.3297L22.3174-49.3581L22.3174-34.6047C22.3174-32.2974 20.4469-30.4269 18.1396-30.4269C15.8324-30.4269 13.9619-32.2974 13.9619-34.6047L13.9619-51.8377C13.9619-53.7447 15.2397-55.3534 16.9858-55.854C17.1679-56.0073 17.3665-56.1465 17.5799-56.2697L31.5666-64.3449C33.1565-65.2629 38.4986-65.6179 43.2531-64.0766ZM45.0336-84.6679C49.6482-84.6679 53.3891-80.9272 53.3891-76.3125C53.3891-71.6979 49.6482-67.9572 45.0336-67.9572C40.4191-67.9572 36.6783-71.6979 36.6783-76.3125C36.6783-80.9272 40.4191-84.6679 45.0336-84.6679Z", 13.96, -84.67, 61.47, 100.57};
++inline Glyph const k_cycling = {"M50.9511-64.8445C47.2551-64.899 47.2551-59.3046 50.9511-59.3574L59.1514-59.3574L59.1514-52.4133L43.83-39.6076L38.5022-53.8712L40.0186-53.8712C43.7146-53.8163 43.7146-59.4107 40.0186-59.3579L29.0851-59.3579C25.3891-59.4127 25.3891-53.8184 29.0851-53.8712L32.651-53.8712L37.5203-40.84C34.963-42.1163 32.124-42.8976 29.0855-42.8976C18.5506-42.8976 9.95214-34.2677 9.95214-23.6943C9.95214-13.121 18.5506-4.4911 29.0855-4.4911C39.6203-4.4911 48.2188-13.121 48.2188-23.6943C48.2188-27.3699 47.1239-30.7778 45.3253-33.7036L60.7428-46.5954L63.2733-40.2292C57.574-36.897 53.6855-30.7655 53.6855-23.6943C53.6855-13.121 62.284-4.4911 72.8188-4.4911C83.3537-4.4911 91.9521-13.121 91.9521-23.6943C91.9521-34.2677 83.3537-42.8976 72.8188-42.8976C71.2712-42.8976 69.7881-42.6595 68.3446-42.3083L64.6186-51.6635L64.6186-62.1009C64.6186-63.6158 63.3946-64.8445 61.8853-64.8445L50.9511-64.8445ZM29.0846-37.4107C32.3225-37.4107 35.2487-36.2479 37.5837-34.378L27.3332-25.8048C24.5403-23.4603 28.0318-19.2512 30.8352-21.5827L41.0856-30.156C42.1144-28.2257 42.7513-26.0471 42.7513-23.6937C42.7513-16.0855 36.6648-9.97667 29.0847-9.97667C21.5046-9.97667 15.4181-16.0855 15.4181-23.6937C15.4181-31.3018 21.5037-37.4107 29.0847-37.4107L29.0846-37.4107ZM72.8171-37.4106C80.3971-37.4106 86.4837-31.3017 86.4837-23.6935C86.4837-16.0854 80.3971-9.97652 72.8171-9.97652C65.237-9.97652 59.1505-16.0854 59.1505-23.6935C59.1505-28.5053 61.593-32.703 65.3002-35.1493L70.2761-22.6756C71.6209-19.2568 76.7289-21.3034 75.359-24.7117L70.3945-37.164C71.1828-37.3044 71.9875-37.4106 72.8179-37.4106L72.8171-37.4106Z", 9.95, -64.90, 82.00, 60.41};
++inline Glyph const k_driving = {"M80.9384-65.0745C80.0718-67.641 77.6451-69.468 74.7851-69.468L27.1186-69.468C24.2586-69.468 21.8753-67.641 20.9653-65.0745L12.4288-40.4099C12.1255-39.4964 11.9521-38.5394 11.9521-37.5389L11.9521-6.39302C11.9521-2.78253 14.8555 0.132 18.4521 0.132C22.0488 0.132 24.9521-2.78253 24.9521-6.39302L24.9521-8.56801L76.9521-8.56801L76.9521-6.39302C76.9521-2.82599 79.8555 0.132 83.4521 0.132C87.0055 0.132 89.9521-2.78253 89.9521-6.39302L89.9521-37.5389C89.9521-38.4959 89.7788-39.4964 89.4755-40.4099L80.939-65.0745L80.9384-65.0745ZM27.1184-21.6179C23.5218-21.6179 20.6184-24.5324 20.6184-28.1429C20.6184-31.7534 23.5218-34.6679 27.1184-34.6679C30.7151-34.6679 33.6184-31.7534 33.6184-28.1429C33.6184-24.5324 30.7151-21.6179 27.1184-21.6179ZM74.7849-21.6179C71.1882-21.6179 68.2849-24.5324 68.2849-28.1429C68.2849-31.7534 71.1882-34.6679 74.7849-34.6679C78.3815-34.6679 81.2849-31.7534 81.2849-28.1429C81.2849-24.5324 78.3815-21.6179 74.7849-21.6179ZM20.6184-43.3677L26.1218-59.985C26.7284-61.725 28.3751-62.943 30.2384-62.943L71.6649-62.943C73.5282-62.943 75.1749-61.725 75.7815-59.985L81.2849-43.3677L20.6184-43.3677Z", 11.95, -69.47, 78.00, 69.60};
++inline Glyph const k_publictransport = {"M72.1316-79.668L29.7681-79.668C21.02-79.668 13.819-72.7867 13.4218-64.047L10.8058-6.40316L10.9117-4.12321C11.8569 4.01502 18.7731 10.332 27.1651 10.332L75.1064 10.3278L77.3791 10.1184C85.4659 8.80429 91.4623 1.60796 91.0813-6.77496L88.478-64.0474C88.0812-72.7869 80.8804-79.668 72.1316-79.668ZM28.0413-14.2138C31.6562-14.2138 34.5867-11.2834 34.5867-7.66841C34.5867-4.05346 31.6562-1.12299 28.0413-1.12299C24.4263-1.12299 21.4959-4.05346 21.4959-7.66841C21.4959-11.2834 24.4263-14.2138 28.0413-14.2138ZM73.8592-14.2138C77.4742-14.2138 80.4046-11.2834 80.4046-7.66841C80.4046-4.05346 77.4742-1.12299 73.8592-1.12299C70.2443-1.12299 67.3138-4.05346 67.3138-7.66841C67.3138-11.2834 70.2443-14.2138 73.8592-14.2138ZM69.3054-67.3953C73.6828-67.3953 77.2848-63.9498 77.4791-59.5767L78.3882-39.1223C78.5888-34.6082 75.092-30.7861 70.5778-30.5854L31.6857-30.5774C27.1671-30.5774 23.504-34.2405 23.504-38.7591L24.4211-59.5768C24.6154-63.9499 28.2174-67.3953 32.5947-67.3953L69.3054-67.3953Z", 10.81, -79.67, 80.66, 90.00};
++inline Glyph const k_download = {"M68.3594 1.2207C68.3594-1.07422 66.7969-2.73438 64.5508-2.73438L13.6719-2.73438C11.377-2.73438 9.76562-1.07422 9.76562 1.2207C9.76562 3.51562 11.377 5.12695 13.6719 5.12695L64.5508 5.12695C66.7969 5.12695 68.3594 3.51562 68.3594 1.2207ZM13.5742-35.9863C11.377-35.9863 9.76562-34.3262 9.76562-32.1777C9.76562-31.1035 10.1562-30.1758 10.9863-29.2969L36.1328-4.10156C36.9629-3.17383 37.9883-2.73438 39.0625-2.73438C40.1367-2.73438 41.1621-3.17383 41.9922-4.10156L67.1387-29.2969C67.9688-30.1758 68.3594-31.1035 68.3594-32.1777C68.3594-34.3262 66.748-35.9863 64.5508-35.9863C63.5254-35.9863 62.5-35.6445 61.8164-34.9121L54.834-28.125L39.0625-10.6934L23.291-28.125L16.3086-34.9121C15.625-35.6445 14.5996-35.9863 13.5742-35.9863ZM42.4805-10.0586L43.0176-22.8516L43.0176-71.5332C43.0176-73.8281 41.3574-75.3906 39.0625-75.3906C36.7676-75.3906 35.1074-73.8281 35.1074-71.5332L35.1074-22.8516L35.6445-10.0586C35.7422-8.20312 37.207-6.64062 39.0625-6.64062C40.918-6.64062 42.3828-8.20312 42.4805-10.0586Z", 9.77, -75.39, 58.59, 80.52};
++inline Glyph const k_track = {"M40.1992-69.3823C46.2435-75.4925 56.0966-75.5457 62.2068-69.5014C68.3169-63.4571 68.3701-53.604 62.3258-47.4939L38.4474-23.3558C34.601-19.4676 34.6349-13.1974 38.5232-9.35107C42.4114-5.50465 48.6816-5.53858 52.528-9.42679L75.9249-33.0781C75.6716-33.6026 75.4569-34.1381 75.2803-34.6809L68.014-34.6807C63.4543-34.6807 62.0294-40.9505 66.304-42.9456L103.354-60.0457C106.774-61.4715 110.479-57.7663 109.054-54.3455L91.9542-17.2955C89.9591-13.0202 83.6893-14.4458 83.6893-19.0056L83.6894-26.4419C83.1049-26.6195 82.5268-26.8413 81.9593-27.1086L58.5625-3.45722C51.4192 3.76378 39.7746 3.82675 32.5536-3.31654C25.3326-10.4598 25.2696-22.1044 32.413-29.3254L56.2913-53.4635C59.0387-56.2408 59.0145-60.7195 56.2371-63.4669C53.4598-66.2143 48.9811-66.1901 46.2337-63.4127L30.8068-47.818C31.5216-46.1893 31.9183-44.3899 31.9183-42.4986C31.9183-35.1785 25.9754-29.2356 18.6553-29.2356C11.3353-29.2356 5.39237-35.1785 5.39237-42.4986C5.39237-49.8186 11.3353-55.7615 18.6553-55.7615C20.9865-55.7615 23.1781-55.1588 25.0825-54.1008L40.1992-69.3823Z", 5.39, -75.55, 105.09, 79.37};
++inline Glyph const k_share = {"M25.9766 4.44336L62.2559 4.44336C72.6562 4.44336 78.4668-1.36719 78.4668-11.7676L78.4668-41.4062C78.4668-51.8066 72.6562-57.5684 62.2559-57.5684L25.9766-57.5684C15.5762-57.5684 9.76562-51.8066 9.76562-41.4062L9.76562-11.7676C9.76562-1.36719 15.5762 4.44336 25.9766 4.44336ZM25.9766-2.58789C20.1172-2.58789 16.7969-5.9082 16.7969-11.7676L16.7969-41.4062C16.7969-47.2168 20.1172-50.5371 25.9766-50.5371L62.2559-50.5371C68.1152-50.5371 71.4355-47.2168 71.4355-41.4062L71.4355-11.7676C71.4355-5.9082 68.1152-2.58789 62.2559-2.58789L25.9766-2.58789Z M57.5497-20.8491L91.6275-54.927C95.9089-59.2083 95.9089-66.3208 91.593-70.6367C87.3117-74.918 80.1647-74.9525 75.8834-70.6712L41.8055-36.5933C37.5242-32.312 37.5933-25.1995 41.8746-20.9182C46.1904-16.6024 53.2683-16.5678 57.5497-20.8491Z M65.2145-62.5574C65.8015-61.9704 66.7338-61.5216 67.6314-61.5907L75.6071-61.9014L83.134-62.1776L82.8923-54.6162L82.547-46.6751C82.5124-45.7429 82.8922-44.8797 83.5137-44.2583C84.7912-42.9807 86.6557-42.9117 87.8987-44.1547C88.5892-44.8452 88.7963-45.6047 88.8309-46.537L88.4166-63.8694C88.4166-65.1123 88.1058-65.8375 87.4498-66.4935C86.8283-67.1149 86.1033-67.4256 84.8257-67.4602L67.5278-67.84C66.5611-67.84 65.836-67.5983 65.1455-66.9078C63.9026-65.6649 63.9371-63.8349 65.2145-62.5574ZM47.2953-26.3389C48.6418-24.9924 50.886-24.9579 52.1635-26.2353L79.0943-53.1662L86.5176-61.418C87.5879-62.6265 87.6569-64.4218 86.5176-65.5612C85.4127-66.6661 83.6174-66.597 82.4088-65.5267L74.157-58.1035L47.2262-31.1726C45.9487-29.8952 45.9832-27.6509 47.2953-26.3389Z", 9.77, -74.95, 86.14, 79.40};
++inline Glyph const k_more = {"M72.7051-27.6855C76.9043-27.6855 80.2734-31.0547 80.2734-35.2539C80.2734-39.4531 76.9043-42.8223 72.7051-42.8223C68.5547-42.8223 65.1367-39.4531 65.1367-35.2539C65.1367-31.0547 68.5547-27.6855 72.7051-27.6855Z M43.5547-27.6855C47.7539-27.6855 51.123-31.0547 51.123-35.2539C51.123-39.4531 47.7539-42.8223 43.5547-42.8223C39.3555-42.8223 35.9863-39.4531 35.9863-35.2539C35.9863-31.0547 39.3555-27.6855 43.5547-27.6855Z M14.4043-27.6855C18.6035-27.6855 21.9727-31.0547 21.9727-35.2539C21.9727-39.4531 18.6035-42.8223 14.4043-42.8223C10.2051-42.8223 6.83594-39.4531 6.83594-35.2539C6.83594-31.0547 10.2051-27.6855 14.4043-27.6855Z", 6.84, -42.82, 73.44, 15.14};
++}  // namespace ut_icons
+diff --git a/qt/ut_mobile_ui.cpp b/qt/ut_mobile_ui.cpp
+new file mode 100644
+index 0000000..068c69e
+--- /dev/null
++++ b/qt/ut_mobile_ui.cpp
+@@ -0,0 +1,1552 @@
++#include "qt/ut_mobile_ui.hpp"
++
++#include "qt/draw_widget.hpp"
++#include "qt/search_panel.hpp"
++#include "qt/ut_icons_data.hpp"
++#include "qt/ut_integration.hpp"
++
++#include "map/routing_manager.hpp"
++
++#include "platform/distance.hpp"
++#include "platform/preferred_languages.hpp"
++
++#include "geometry/mercator.hpp"
++
++#include "base/string_utils.hpp"
++
++#include <QtCore/QEvent>
++#include <QtCore/QLocale>
++#include <QtCore/QRegularExpression>
++#include <QtGui/QGuiApplication>
++#include <QtGui/QInputMethod>
++#include <QtGui/QMouseEvent>
++#include <QtGui/QPainter>
++#include <QtGui/QPainterPath>
++#include <QtSvg/QSvgRenderer>
++#include <QtWidgets/QAbstractItemView>
++#include <QtWidgets/QAbstractScrollArea>
++#include <QtWidgets/QApplication>
++#include <QtWidgets/QDialog>
++#include <QtWidgets/QFrame>
++#include <QtWidgets/QHBoxLayout>
++#include <QtWidgets/QLabel>
++#include <QtWidgets/QPushButton>
++#include <QtWidgets/QScrollArea>
++#include <QtWidgets/QScroller>
++#include <QtWidgets/QVBoxLayout>
++
++#include <algorithm>
++#include <cmath>
++
++namespace qt
++{
++namespace mobile
++{
++namespace
++{
++int constexpr kMargin = 12;
++int constexpr kButton = 52;
++int constexpr kTop = 30;     // clear of the indicator bar / camera hole
++int constexpr kBottom = 22;  // clear of Lomiri's bottom edge
++
++bool IsGerman()
++{
++  static bool const german = languages::GetCurrentNorm().starts_with("de");
++  return german;
++}
++
++QString Hex(QColor const & c) { return c.name(QColor::HexRgb); }
++
++QString Rgba(QColor const & c)
++{
++  return QString("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alpha());
++}
++
++ut_icons::Glyph const * FindGlyph(QString const & name)
++{
++  if (name == "walking") return &ut_icons::k_walking;
++  if (name == "cycling") return &ut_icons::k_cycling;
++  if (name == "driving") return &ut_icons::k_driving;
++  if (name == "publictransport") return &ut_icons::k_publictransport;
++  if (name == "download") return &ut_icons::k_download;
++  if (name == "track") return &ut_icons::k_track;
++  if (name == "share") return &ut_icons::k_share;
++  return nullptr;
++}
++
++void PaintGlyph(QPainter & p, ut_icons::Glyph const & g, QRectF const & r, QColor const & color)
++{
++  // Pad the glyph box a little, keep its aspect ratio, center it in r.
++  double const pad = std::max(g.w, g.h) * 0.04;
++  QRectF box(g.x - pad, g.y - pad, g.w + 2 * pad, g.h + 2 * pad);
++  QByteArray svg = QString("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"%1 %2 %3 %4\">"
++                           "<path fill=\"%5\" d=\"%6\"/></svg>")
++                       .arg(box.x()).arg(box.y()).arg(box.width()).arg(box.height())
++                       .arg(Hex(color), QString::fromLatin1(g.path))
++                       .toUtf8();
++  QSvgRenderer renderer(svg);
++  double const scale = std::min(r.width() / box.width(), r.height() / box.height());
++  QSizeF const size(box.width() * scale, box.height() * scale);
++  QRectF const target(r.center().x() - size.width() / 2, r.center().y() - size.height() / 2, size.width(),
++                      size.height());
++  renderer.render(&p, target);
++}
++
++QPainterPath StarPath(QPointF c, double outer, double inner)
++{
++  QPainterPath path;
++  for (int i = 0; i < 10; ++i)
++  {
++    double const a = -M_PI / 2 + i * M_PI / 5;
++    double const rad = (i % 2 == 0) ? outer : inner;
++    QPointF const pt(c.x() + rad * std::cos(a), c.y() + rad * std::sin(a));
++    if (i == 0)
++      path.moveTo(pt);
++    else
++      path.lineTo(pt);
++  }
++  path.closeSubpath();
++  return path;
++}
++
++QFrame * Separator(QWidget * parent = nullptr)
++{
++  auto * line = new QFrame(parent);
++  line->setFixedHeight(1);
++  line->setObjectName("utSeparator");
++  line->setStyleSheet(QString("background: %1; border: none;").arg(Hex(CurrentStyle().separator)));
++  return line;
++}
++
++QLabel * MakeLabel(QString const & text, int px, QColor const & color, bool bold = false, QWidget * parent = nullptr)
++{
++  auto * label = new QLabel(text, parent);
++  label->setWordWrap(true);
++  QFont f = label->font();
++  f.setPixelSize(px);
++  f.setBold(bold);
++  label->setFont(f);
++  label->setStyleSheet(QString("color: %1; background: transparent;").arg(Hex(color)));
++  return label;
++}
++}  // namespace
++
++QString Tr(char const * en, char const * de) { return QString::fromUtf8(IsGerman() ? de : en); }
++
++Style const & CurrentStyle()
++{
++  static Style const dark = []
++  {
++    Style s;
++    s.dark = true;
++    s.panel = QColor(0x1c, 0x1c, 0x1e, 245);
++    s.panelPressed = QColor(0x3a, 0x3a, 0x3c);
++    s.field = QColor(0x2c, 0x2c, 0x2e);
++    s.text = QColor(0xff, 0xff, 0xff);
++    s.secondary = QColor(0x8e, 0x8e, 0x93);
++    s.separator = QColor(0x38, 0x38, 0x3a);
++    s.accent = QColor(0x6d, 0xb3, 0x5f);
++    s.selected = QColor(0x63, 0x63, 0x66);
++    s.locationBlue = QColor(0x3d, 0x8b, 0xfd);
++    return s;
++  }();
++  static Style const light = []
++  {
++    Style s;
++    s.dark = false;
++    s.panel = QColor(0xff, 0xff, 0xff, 248);
++    s.panelPressed = QColor(0xe5, 0xe5, 0xea);
++    s.field = QColor(0xef, 0xef, 0xf4);
++    s.text = QColor(0x1c, 0x1c, 0x1e);
++    s.secondary = QColor(0x6d, 0x6d, 0x72);
++    s.separator = QColor(0xd1, 0xd1, 0xd6);
++    s.accent = QColor(0x2e, 0x8b, 0x3a);
++    s.selected = QColor(0xd1, 0xd1, 0xd6);
++    s.locationBlue = QColor(0x1e, 0x78, 0xf0);
++    return s;
++  }();
++  return ut::Theme::Instance().IsDark() ? dark : light;
++}
++
++void PaintIcon(QPainter & p, QString const & name, QRectF const & r, QColor const & color)
++{
++  p.save();
++  p.setRenderHint(QPainter::Antialiasing);
++  if (auto const * glyph = FindGlyph(name))
++  {
++    PaintGlyph(p, *glyph, r, color);
++    p.restore();
++    return;
++  }
++
++  // Vector icons on a 24 x 24 grid.
++  double const s = std::min(r.width(), r.height()) / 24.0;
++  p.translate(r.center().x() - 12 * s, r.center().y() - 12 * s);
++  p.scale(s, s);
++  QPen pen(color, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
++  p.setPen(pen);
++  p.setBrush(Qt::NoBrush);
++  auto const fill = [&p, &color]
++  {
++    p.setPen(Qt::NoPen);
++    p.setBrush(color);
++  };
++  auto const width = [&p, &pen](double w)
++  {
++    pen.setWidthF(w);
++    p.setPen(pen);
++  };
++
++  if (name == "more")
++  {
++    fill();
++    for (double x : {5.0, 12.0, 19.0})
++      p.drawEllipse(QPointF(x, 12), 2.2, 2.2);
++  }
++  else if (name == "layers")
++  {
++    QPolygonF top({{12, 3}, {21, 8}, {12, 13}, {3, 8}});
++    p.setBrush(color);
++    p.drawPolygon(top);
++    p.setBrush(Qt::NoBrush);
++    p.drawPolyline(QPolygonF({{3, 12}, {12, 17}, {21, 12}}));
++    p.drawPolyline(QPolygonF({{3, 16}, {12, 21}, {21, 16}}));
++  }
++  else if (name == "star")
++  {
++    fill();
++    p.drawPath(StarPath({12, 12.6}, 10, 4.3));
++  }
++  else if (name == "star_outline")
++  {
++    width(1.7);
++    p.drawPath(StarPath({12, 12.6}, 9.6, 4.2));
++  }
++  else if (name == "search")
++  {
++    width(2.4);
++    p.drawEllipse(QPointF(10.3, 10.3), 6.6, 6.6);
++    width(2.8);
++    p.drawLine(QPointF(15.3, 15.3), QPointF(20.6, 20.6));
++  }
++  else if (name == "location" || name == "location_fill")
++  {
++    QPolygonF arrow({{20.5, 3.5}, {3.5, 10.8}, {11.4, 12.6}, {13.2, 20.5}});
++    if (name == "location_fill")
++      p.setBrush(color);
++    width(1.9);
++    p.drawPolygon(arrow);
++  }
++  else if (name == "close")
++  {
++    width(2.4);
++    p.drawLine(QPointF(6.5, 6.5), QPointF(17.5, 17.5));
++    p.drawLine(QPointF(17.5, 6.5), QPointF(6.5, 17.5));
++  }
++  else if (name == "back")
++  {
++    width(2.6);
++    p.drawPolyline(QPolygonF({{15, 4}, {7, 12}, {15, 20}}));
++  }
++  else if (name == "chevron_right")
++  {
++    width(2.0);
++    p.drawPolyline(QPolygonF({{9, 5}, {16, 12}, {9, 19}}));
++  }
++  else if (name == "plus")
++  {
++    width(2.2);
++    p.drawLine(QPointF(12, 4), QPointF(12, 20));
++    p.drawLine(QPointF(4, 12), QPointF(20, 12));
++  }
++  else if (name == "check")
++  {
++    width(2.6);
++    p.drawPolyline(QPolygonF({{4.5, 12.5}, {9.5, 17.5}, {19.5, 6.5}}));
++  }
++  else if (name == "gear")
++  {
++    QPainterPath path;
++    path.setFillRule(Qt::OddEvenFill);
++    for (int i = 0; i < 8; ++i)
++    {
++      QTransform t;
++      t.translate(12, 12);
++      t.rotate(i * 45);
++      QPainterPath tooth;
++      tooth.addRoundedRect(QRectF(-2.0, -10.5, 4.0, 5.0), 1.0, 1.0);
++      path = path.united(t.map(tooth));
++    }
++    QPainterPath ring;
++    ring.addEllipse(QPointF(12, 12), 7.2, 7.2);
++    path = path.united(ring);
++    QPainterPath hole;
++    hole.addEllipse(QPointF(12, 12), 3.0, 3.0);
++    path = path.subtracted(hole);
++    fill();
++    p.drawPath(path);
++  }
++  else if (name == "info")
++  {
++    width(1.8);
++    p.drawEllipse(QPointF(12, 12), 9.5, 9.5);
++    width(2.2);
++    p.drawLine(QPointF(12, 11), QPointF(12, 17));
++    fill();
++    p.drawEllipse(QPointF(12, 7.4), 1.4, 1.4);
++  }
++  else if (name == "route_from")
++  {
++    width(2.0);
++    p.drawEllipse(QPointF(12, 7), 4, 4);
++    p.drawLine(QPointF(12, 11), QPointF(12, 21));
++    p.drawPolyline(QPolygonF({{8.5, 17.5}, {12, 21}, {15.5, 17.5}}));
++  }
++  else if (name == "route_to")
++  {
++    width(2.0);
++    p.drawLine(QPointF(12, 3), QPointF(12, 12));
++    p.drawPolyline(QPolygonF({{8.5, 8.5}, {12, 12}, {15.5, 8.5}}));
++    p.setBrush(color);
++    p.drawEllipse(QPointF(12, 17), 3.6, 3.6);
++  }
++  else if (name == "stop")
++  {
++    width(2.0);
++    p.drawLine(QPointF(12, 2.5), QPointF(12, 7.5));
++    p.drawLine(QPointF(12, 16.5), QPointF(12, 21.5));
++    p.drawEllipse(QPointF(12, 12), 4.5, 4.5);
++  }
++  else if (name == "edit")
++  {
++    width(1.8);
++    p.drawPolygon(QPolygonF({{4, 20}, {5, 15}, {15.5, 4.5}, {19.5, 8.5}, {9, 19}}));
++    p.drawLine(QPointF(13.5, 6.5), QPointF(17.5, 10.5));
++  }
++  else if (name == "ruler")
++  {
++    width(1.8);
++    p.drawPolygon(QPolygonF({{2.5, 15.5}, {15.5, 2.5}, {21.5, 8.5}, {8.5, 21.5}}));
++    for (int i = 0; i < 4; ++i)
++    {
++      double const x = 6.5 + i * 3.0, y = 11.5 - i * 3.0;
++      p.drawLine(QPointF(x, y), QPointF(x + (i % 2 ? 1.6 : 2.6), y + (i % 2 ? 1.6 : 2.6)));
++    }
++  }
++  else if (name == "person")
++  {
++    width(1.9);
++    p.drawEllipse(QPointF(12, 8), 3.8, 3.8);
++    QPainterPath body;
++    body.moveTo(4.5, 20.5);
++    body.cubicTo(5.5, 14.5, 18.5, 14.5, 19.5, 20.5);
++    p.drawPath(body);
++  }
++  else if (name == "people")
++  {
++    fill();
++    p.drawEllipse(QPointF(9, 7.5), 3.3, 3.3);
++    p.drawEllipse(QPointF(17, 8.5), 2.6, 2.6);
++    QPainterPath a;
++    a.moveTo(2.5, 19.5);
++    a.cubicTo(3, 12.5, 15, 12.5, 15.5, 19.5);
++    a.closeSubpath();
++    p.drawPath(a);
++    QPainterPath b;
++    b.moveTo(15.8, 13.2);
++    b.cubicTo(19.5, 12.5, 22, 15, 22, 18.5);
++    b.lineTo(17, 18.5);
++    b.cubicTo(17, 16.5, 16.6, 14.6, 15.8, 13.2);
++    p.drawPath(b);
++  }
++  else if (name == "list")
++  {
++    width(2.0);
++    for (double y : {6.0, 12.0, 18.0})
++      p.drawLine(QPointF(9, y), QPointF(20, y));
++    fill();
++    for (double y : {6.0, 12.0, 18.0})
++      p.drawEllipse(QPointF(4.5, y), 1.5, 1.5);
++  }
++  else if (name == "clock")
++  {
++    width(1.8);
++    p.drawEllipse(QPointF(12, 12), 9.2, 9.2);
++    p.drawPolyline(QPolygonF({{12, 6.5}, {12, 12}, {15.8, 14.3}}));
++  }
++  else if (name == "phone")
++  {
++    width(1.8);
++    p.drawRoundedRect(QRectF(7, 2.5, 10, 19), 2.2, 2.2);
++    p.drawLine(QPointF(10.5, 18.3), QPointF(13.5, 18.3));
++  }
++  else if (name == "globe")
++  {
++    width(1.6);
++    p.drawEllipse(QPointF(12, 12), 9.2, 9.2);
++    p.drawEllipse(QPointF(12, 12), 4.0, 9.2);
++    p.drawLine(QPointF(2.8, 12), QPointF(21.2, 12));
++  }
++  else if (name == "mail")
++  {
++    width(1.8);
++    p.drawRoundedRect(QRectF(3, 5.5, 18, 13), 2, 2);
++    p.drawPolyline(QPolygonF({{3.5, 6.5}, {12, 13}, {20.5, 6.5}}));
++  }
++  else if (name == "pin")
++  {
++    QPainterPath pin;
++    pin.setFillRule(Qt::OddEvenFill);
++    pin.moveTo(12, 22);
++    pin.cubicTo(9, 17.5, 5, 13.8, 5, 9.2);
++    pin.arcTo(QRectF(5, 2.2, 14, 14), 180, -180);
++    pin.cubicTo(19, 13.8, 15, 17.5, 12, 22);
++    pin.closeSubpath();
++    pin.addEllipse(QPointF(12, 9.2), 2.6, 2.6);
++    fill();
++    p.drawPath(pin);
++  }
++  else if (name == "crosshair")
++  {
++    width(1.8);
++    p.drawEllipse(QPointF(12, 12), 6.5, 6.5);
++    p.drawLine(QPointF(12, 2), QPointF(12, 6));
++    p.drawLine(QPointF(12, 18), QPointF(12, 22));
++    p.drawLine(QPointF(2, 12), QPointF(6, 12));
++    p.drawLine(QPointF(18, 12), QPointF(22, 12));
++  }
++  else if (name == "wifi")
++  {
++    width(2.0);
++    p.drawArc(QRectF(2, 5, 20, 20), 45 * 16, 90 * 16);
++    p.drawArc(QRectF(6, 9, 12, 12), 45 * 16, 90 * 16);
++    fill();
++    p.drawEllipse(QPointF(12, 18.5), 1.8, 1.8);
++  }
++  else if (name == "cuisine")
++  {
++    width(1.8);
++    p.drawLine(QPointF(8, 3), QPointF(8, 21));
++    p.drawLine(QPointF(5, 3), QPointF(5, 8));
++    p.drawLine(QPointF(11, 3), QPointF(11, 8));
++    p.drawArc(QRectF(5, 4, 6, 7), 180 * 16, 180 * 16);
++    QPainterPath knife;
++    knife.moveTo(17, 21);
++    knife.lineTo(17, 3);
++    knife.cubicTo(19.5, 5, 20, 9, 19.5, 13);
++    knife.lineTo(17, 13);
++    p.drawPath(knife);
++  }
++  else if (name == "mountain")
++  {
++    fill();
++    p.drawPolygon(QPolygonF({{1.5, 20}, {9, 6.5}, {13, 13}, {16, 8.5}, {22.5, 20}}));
++  }
++  else if (name == "contour")
++  {
++    width(1.6);
++    p.drawEllipse(QPointF(12, 12), 10, 8);
++    p.drawEllipse(QPointF(12.5, 12.5), 6.5, 5);
++    p.drawEllipse(QPointF(13, 13), 2.8, 2.2);
++  }
++  else if (name == "cube")
++  {
++    width(1.7);
++    p.drawPolygon(QPolygonF({{12, 2.5}, {20.5, 7}, {20.5, 17}, {12, 21.5}, {3.5, 17}, {3.5, 7}}));
++    p.drawPolyline(QPolygonF({{3.5, 7}, {12, 11.5}, {20.5, 7}}));
++    p.drawLine(QPointF(12, 11.5), QPointF(12, 21.5));
++  }
++  else if (name == "map")
++  {
++    width(1.7);
++    p.drawPolygon(QPolygonF({{2.5, 6}, {8.5, 3.5}, {15.5, 6}, {21.5, 3.5}, {21.5, 18}, {15.5, 20.5}, {8.5, 18},
++                             {2.5, 20.5}}));
++    p.drawLine(QPointF(8.5, 3.5), QPointF(8.5, 18));
++    p.drawLine(QPointF(15.5, 6), QPointF(15.5, 20.5));
++  }
++  else if (name == "circle")
++  {
++    width(3.0);
++    p.drawEllipse(QPointF(12, 12), 6.5, 6.5);
++  }
++  p.restore();
++}
++
++// --- Widgets -------------------------------------------------------------------
++
++IconView::IconView(QString name, int size, QWidget * parent) : QWidget(parent), m_name(std::move(name))
++{
++  setFixedSize(size, size);
++  setAttribute(Qt::WA_TransparentForMouseEvents);
++}
++
++void IconView::paintEvent(QPaintEvent *)
++{
++  QPainter p(this);
++  PaintIcon(p, m_name, rect(), m_color.isValid() ? m_color : CurrentStyle().secondary);
++}
++
++RoundButton::RoundButton(QString icon, int diameter, QWidget * parent)
++  : QAbstractButton(parent)
++  , m_icon(std::move(icon))
++  , m_diameter(diameter)
++{
++  setFixedSize(diameter, diameter);
++  setCursor(Qt::PointingHandCursor);
++}
++
++void RoundButton::paintEvent(QPaintEvent *)
++{
++  Style const & st = CurrentStyle();
++  QPainter p(this);
++  p.setRenderHint(QPainter::Antialiasing);
++  QRectF const r = QRectF(rect()).adjusted(1, 1, -1, -1);
++  if (!m_flat)
++  {
++    p.setPen(Qt::NoPen);
++    p.setBrush(QColor(0, 0, 0, st.dark ? 90 : 45));
++    p.drawEllipse(r.translated(0, 1.2));
++    p.setBrush(isDown() ? st.panelPressed : st.panel);
++    p.drawEllipse(r.adjusted(0, 0, 0, -0.6));
++  }
++  else if (isDown())
++  {
++    p.setPen(Qt::NoPen);
++    p.setBrush(st.panelPressed);
++    p.drawEllipse(r);
++  }
++  else
++  {
++    p.setPen(Qt::NoPen);
++    p.setBrush(st.field);
++    p.drawEllipse(r);
++  }
++  double const icon = m_diameter * (m_flat ? 0.5 : 0.46);
++  QRectF const ir(r.center().x() - icon / 2, r.center().y() - icon / 2, icon, icon);
++  QColor c = m_iconColor.isValid() ? m_iconColor : st.text;
++  if (!isEnabled())
++    c = st.secondary;
++  PaintIcon(p, m_icon, ir, c);
++}
++
++RowButton::RowButton(QString icon, QString text, QWidget * parent) : QAbstractButton(parent), m_icon(std::move(icon))
++{
++  setText(text);
++  QFont f = font();
++  f.setPixelSize(17);
++  setFont(f);
++  setCursor(Qt::PointingHandCursor);
++}
++
++QSize RowButton::sizeHint() const
++{
++  QFontMetrics fm(font());
++  return {56 + fm.horizontalAdvance(text()) + (isCheckable() ? 40 : 16), 48};
++}
++
++void RowButton::paintEvent(QPaintEvent *)
++{
++  Style const & st = CurrentStyle();
++  QPainter p(this);
++  p.setRenderHint(QPainter::Antialiasing);
++  if (isDown())
++  {
++    p.setPen(Qt::NoPen);
++    p.setBrush(st.panelPressed);
++    p.drawRoundedRect(QRectF(rect()).adjusted(4, 1, -4, -1), 10, 10);
++  }
++  QColor const iconColor = (isCheckable() && isChecked()) ? st.accent : st.text;
++  PaintIcon(p, m_icon, QRectF(16, (height() - 22) / 2.0, 22, 22), iconColor);
++  p.setPen(st.text);
++  p.setFont(font());
++  int const right = isCheckable() ? 40 : 12;
++  p.drawText(QRect(54, 0, width() - 54 - right, height()), Qt::AlignVCenter | Qt::AlignLeft | Qt::TextWordWrap,
++             text());
++  if (isCheckable() && isChecked())
++    PaintIcon(p, "check", QRectF(width() - 34, (height() - 20) / 2.0, 20, 20), st.accent);
++}
++
++Card::Card(QWidget * parent, bool topOnly) : QWidget(parent), m_topOnly(topOnly) {}
++
++void Card::paintEvent(QPaintEvent *)
++{
++  Style const & st = CurrentStyle();
++  QPainter p(this);
++  p.setRenderHint(QPainter::Antialiasing);
++  p.setPen(Qt::NoPen);
++  double const radius = 16;
++  QRectF const r(rect());
++  QPainterPath path;
++  if (m_topOnly)
++  {
++    path.moveTo(r.left(), r.bottom() + 1);
++    path.lineTo(r.left(), r.top() + radius);
++    path.arcTo(QRectF(r.left(), r.top(), 2 * radius, 2 * radius), 180, -90);
++    path.lineTo(r.right() - radius, r.top());
++    path.arcTo(QRectF(r.right() - 2 * radius, r.top(), 2 * radius, 2 * radius), 90, -90);
++    path.lineTo(r.right(), r.bottom() + 1);
++    path.closeSubpath();
++  }
++  else
++  {
++    path.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
++  }
++  QColor bg = st.panel;
++  bg.setAlpha(255);
++  p.setBrush(bg);
++  p.drawPath(path);
++}
++
++namespace
++{
++MapMode const kModes[] = {MapMode::Walking, MapMode::Cycling, MapMode::Driving, MapMode::PublicTransport};
++char const * const kModeIcons[] = {"walking", "cycling", "driving", "publictransport"};
++int constexpr kModeCell = 48;
++}  // namespace
++
++ModeSelector::ModeSelector(std::function<void(MapMode)> onSelect, QWidget * parent)
++  : QWidget(parent)
++  , m_onSelect(std::move(onSelect))
++{
++  setFixedSize(sizeHint());
++  setCursor(Qt::PointingHandCursor);
++}
++
++QSize ModeSelector::sizeHint() const { return {4 * kModeCell + 8, kButton}; }
++
++void ModeSelector::paintEvent(QPaintEvent *)
++{
++  Style const & st = CurrentStyle();
++  QPainter p(this);
++  p.setRenderHint(QPainter::Antialiasing);
++  p.setPen(Qt::NoPen);
++  QRectF const r = QRectF(rect()).adjusted(1, 1, -1, -1);
++  p.setBrush(QColor(0, 0, 0, st.dark ? 90 : 45));
++  p.drawRoundedRect(r.translated(0, 1.2), r.height() / 2, r.height() / 2);
++  p.setBrush(st.panel);
++  p.drawRoundedRect(r.adjusted(0, 0, 0, -0.6), r.height() / 2, r.height() / 2);
++  for (int i = 0; i < 4; ++i)
++  {
++    QRectF const cell(4 + i * kModeCell, (height() - kModeCell) / 2.0, kModeCell, kModeCell);
++    if (kModes[i] == m_mode)
++    {
++      p.setPen(Qt::NoPen);
++      p.setBrush(st.selected);
++      p.drawEllipse(cell.adjusted(3, 3, -3, -3));
++    }
++    PaintIcon(p, kModeIcons[i], cell.adjusted(12, 12, -12, -12), st.text);
++  }
++}
++
++void ModeSelector::mouseReleaseEvent(QMouseEvent * e)
++{
++  int const i = static_cast<int>((e->position().x() - 4) / kModeCell);
++  if (i < 0 || i > 3 || !rect().contains(e->position().toPoint()))
++    return;
++  m_mode = kModes[i];
++  update();
++  if (m_onSelect)
++    m_onSelect(m_mode);
++}
++
++namespace
++{
++class SearchPill : public QAbstractButton
++{
++public:
++  explicit SearchPill(QWidget * parent) : QAbstractButton(parent)
++  {
++    setText(Tr("Search", "Suche"));
++    QFont f = font();
++    f.setPixelSize(17);
++    setFont(f);
++    setFixedHeight(kButton);
++    setCursor(Qt::PointingHandCursor);
++  }
++
++protected:
++  void paintEvent(QPaintEvent *) override
++  {
++    Style const & st = CurrentStyle();
++    QPainter p(this);
++    p.setRenderHint(QPainter::Antialiasing);
++    p.setPen(Qt::NoPen);
++    QRectF const r = QRectF(rect()).adjusted(1, 1, -1, -1);
++    p.setBrush(QColor(0, 0, 0, st.dark ? 90 : 45));
++    p.drawRoundedRect(r.translated(0, 1.2), r.height() / 2, r.height() / 2);
++    p.setBrush(isDown() ? st.panelPressed : st.panel);
++    p.drawRoundedRect(r.adjusted(0, 0, 0, -0.6), r.height() / 2, r.height() / 2);
++    PaintIcon(p, "search", QRectF(18, (height() - 20) / 2.0, 20, 20), st.secondary);
++    p.setPen(st.secondary);
++    p.setFont(font());
++    p.drawText(QRect(48, 0, width() - 56, height()), Qt::AlignVCenter | Qt::AlignLeft, text());
++  }
++};
++
++// Icon above a short text, used in the place page's action bar.
++class ActionButton : public QAbstractButton
++{
++public:
++  ActionButton(QString icon, QString text, QWidget * parent = nullptr) : QAbstractButton(parent), m_icon(std::move(icon))
++  {
++    setText(text);
++    QFont f = font();
++    f.setPixelSize(12);
++    setFont(f);
++    setMinimumHeight(58);
++    setCursor(Qt::PointingHandCursor);
++  }
++  QSize sizeHint() const override { return {72, 58}; }
++
++protected:
++  void paintEvent(QPaintEvent *) override
++  {
++    Style const & st = CurrentStyle();
++    QPainter p(this);
++    p.setRenderHint(QPainter::Antialiasing);
++    if (isDown())
++    {
++      p.setPen(Qt::NoPen);
++      p.setBrush(st.panelPressed);
++      p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), 10, 10);
++    }
++    PaintIcon(p, m_icon, QRectF((width() - 24) / 2.0, 8, 24, 24), st.text);
++    p.setPen(st.text);
++    p.setFont(font());
++    p.drawText(QRect(0, 36, width(), 18), Qt::AlignHCenter | Qt::AlignTop, text());
++  }
++
++private:
++  QString m_icon;
++};
++
++// Detail row of the place page: icon + (rich) text.
++QWidget * DetailRow(QString const & icon, QString const & html, bool links = false)
++{
++  Style const & st = CurrentStyle();
++  auto * row = new QWidget();
++  auto * h = new QHBoxLayout(row);
++  h->setContentsMargins(0, 10, 0, 10);
++  h->setSpacing(16);
++  auto * iv = new IconView(icon, 22);
++  iv->SetColor(st.secondary);
++  h->addWidget(iv, 0, Qt::AlignTop);
++  QLabel * label = MakeLabel(html, 16, st.text);
++  if (links)
++  {
++    label->setTextFormat(Qt::RichText);
++    label->setOpenExternalLinks(true);
++    label->setTextInteractionFlags(Qt::TextBrowserInteraction);
++  }
++  else
++  {
++    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
++  }
++  h->addWidget(label, 1);
++  return row;
++}
++
++QString Link(QString const & href, QString const & text)
++{
++  return QString("<a style=\"color:%1; text-decoration:none;\" href=\"%2\">%3</a>")
++      .arg(Hex(CurrentStyle().accent), href.toHtmlEscaped(), text.toHtmlEscaped());
++}
++}  // namespace
++
++// --- Dialog styling ----------------------------------------------------------------
++
++QString DialogStyleSheet()
++{
++  Style const & st = CurrentStyle();
++  QColor bg = st.panel;
++  bg.setAlpha(255);
++  return QString(
++             "QDialog { background: %1; }"
++             "QDialog QLabel, QDialog QCheckBox, QDialog QRadioButton, QDialog QGroupBox { color: %2; }"
++             "QDialog QPushButton { background: %3; color: %2; border: none; border-radius: 12px;"
++             "  padding: 10px 16px; min-height: 22px; font-size: 16px; }"
++             "QDialog QPushButton:pressed { background: %4; }"
++             "QDialog QPushButton:disabled { color: %5; }"
++             "QDialog QPushButton:default { background: %6; color: white; font-weight: bold; }"
++             "QDialog QLineEdit, QDialog QComboBox, QDialog QSpinBox, QDialog QDoubleSpinBox { background: %3; color: %2;"
++             "  border: none; border-radius: 10px; padding: 8px 12px; min-height: 22px; font-size: 16px; }"
++             "QDialog QTreeView, QDialog QTableView, QDialog QListView, QDialog QTextBrowser, QDialog QTextEdit {"
++             "  background: %1; color: %2; border: none; alternate-background-color: %1;"
++             "  selection-background-color: %4; selection-color: %2; font-size: 16px; }"
++             "QDialog QTreeView::item, QDialog QTableView::item { padding: 8px 2px; border-bottom: 1px solid %7; }"
++             "QDialog QHeaderView::section { background: %1; color: %5; border: none; padding: 6px; }"
++             "QScrollBar:vertical { width: 4px; background: transparent; margin: 0; }"
++             "QScrollBar::handle:vertical { background: %5; border-radius: 2px; min-height: 30px; }"
++             "QScrollBar:horizontal { height: 4px; background: transparent; margin: 0; }"
++             "QScrollBar::handle:horizontal { background: %5; border-radius: 2px; min-width: 30px; }"
++             "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
++             "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }")
++      .arg(Hex(bg), Hex(st.text), Hex(st.field), Hex(st.panelPressed), Hex(st.secondary), Hex(st.accent),
++           Hex(st.separator));
++}
++
++void EnableFingerScrolling(QWidget * viewport)
++{
++  if (!viewport || viewport->property("utFingerScroll").toBool())
++    return;
++  viewport->setProperty("utFingerScroll", true);
++  QScroller::grabGesture(viewport, QScroller::LeftMouseButtonGesture);
++  QScrollerProperties props = QScroller::scroller(viewport)->scrollerProperties();
++  props.setScrollMetric(QScrollerProperties::VerticalOvershootPolicy,
++                        QVariant::fromValue(QScrollerProperties::OvershootAlwaysOff));
++  props.setScrollMetric(QScrollerProperties::HorizontalOvershootPolicy,
++                        QVariant::fromValue(QScrollerProperties::OvershootAlwaysOff));
++  props.setScrollMetric(QScrollerProperties::DragStartDistance, 0.004);
++  QScroller::scroller(viewport)->setScrollerProperties(props);
++}
++
++namespace
++{
++// Every dialog that is shown gets finger scrolling in its lists.
++class DialogTouchFilter : public QObject
++{
++public:
++  using QObject::QObject;
++
++protected:
++  bool eventFilter(QObject * obj, QEvent * ev) override
++  {
++    if (ev->type() == QEvent::Show && obj->isWidgetType())
++    {
++      if (auto * dlg = qobject_cast<QDialog *>(obj))
++      {
++        for (auto * area : dlg->findChildren<QAbstractScrollArea *>())
++        {
++          EnableFingerScrolling(area->viewport());
++          if (auto * view = qobject_cast<QAbstractItemView *>(area))
++          {
++            view->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
++            view->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
++          }
++        }
++      }
++    }
++    return QObject::eventFilter(obj, ev);
++  }
++};
++}  // namespace
++
++// --- MapUi -------------------------------------------------------------------------
++
++MapUi::MapUi(DrawWidget * map, QWidget * parent) : QWidget(parent), m_map(map)
++{
++  setObjectName("utMapUi");
++  m_map->setParent(this);
++  m_map->lower();
++}
++
++Framework & MapUi::GetFramework() const { return m_map->GetFramework(); }
++
++void MapUi::Init(Actions actions)
++{
++  m_actions = std::move(actions);
++  m_initialized = true;
++
++  qApp->installEventFilter(new DialogTouchFilter(qApp));
++  qApp->setStyleSheet(DialogStyleSheet());
++
++  m_scrim = new QWidget(this);
++  m_scrim->setObjectName("utScrim");
++  m_scrim->setAttribute(Qt::WA_NoSystemBackground);
++  m_scrim->installEventFilter(this);
++  m_scrim->hide();
++
++  m_menuButton = new RoundButton("more", kButton, this);
++  m_menuButton->setObjectName("utMenuButton");
++  connect(m_menuButton, &QAbstractButton::clicked, this, [this] { ToggleCard(m_menuCard); });
++
++  m_modes = new ModeSelector([this](MapMode mode)
++  {
++    CloseCards();
++    if (m_actions.setMapMode)
++      m_actions.setMapMode(mode);
++  }, this);
++  m_modes->setObjectName("utModes");
++
++  m_layersButton = new RoundButton("layers", kButton, this);
++  m_layersButton->setObjectName("utLayersButton");
++  connect(m_layersButton, &QAbstractButton::clicked, this, [this]
++  {
++    UpdateLayerChecks();
++    ToggleCard(m_layersCard);
++  });
++
++  m_bookmarksButton = new RoundButton("star", kButton, this);
++  m_bookmarksButton->setObjectName("utBookmarksButton");
++  connect(m_bookmarksButton, &QAbstractButton::clicked, this, [this]
++  {
++    CloseCards();
++    if (m_actions.showBookmarks)
++      m_actions.showBookmarks();
++  });
++
++  auto * pill = new SearchPill(this);
++  pill->setObjectName("utSearchPill");
++  m_searchPill = pill;
++  connect(m_searchPill, &QAbstractButton::clicked, this, [this] { OpenSearch(); });
++
++  m_locationButton = new RoundButton("location", kButton, this);
++  m_locationButton->setObjectName("utLocationButton");
++  connect(m_locationButton, &QAbstractButton::clicked, this, [this]
++  {
++    CloseCards();
++    if (m_actions.myPosition)
++      m_actions.myPosition();
++  });
++
++  auto * country = new QPushButton(this);
++  country->setObjectName("utCountryButton");
++  country->setCursor(Qt::PointingHandCursor);
++  country->hide();
++  m_countryButton = country;
++  connect(country, &QAbstractButton::clicked, this, [this]
++  {
++    switch (m_countryState)
++    {
++    case CountryState::Download: if (m_actions.download) m_actions.download(); break;
++    case CountryState::Downloading: if (m_actions.cancelDownload) m_actions.cancelDownload(); break;
++    case CountryState::Retry: if (m_actions.retryDownload) m_actions.retryDownload(); break;
++    case CountryState::None: break;
++    }
++  });
++
++  // Route summary card (replaces the search bar while a route is shown).
++  m_routeCard = new Card(this);
++  m_routeCard->setObjectName("utRouteCard");
++  {
++    auto * h = new QHBoxLayout(m_routeCard);
++    h->setContentsMargins(18, 10, 10, 10);
++    h->setSpacing(10);
++    auto * v = new QVBoxLayout();
++    v->setSpacing(2);
++    m_routePrimary = MakeLabel({}, 20, CurrentStyle().text, true);
++    m_routeSecondary = MakeLabel({}, 14, CurrentStyle().secondary);
++    v->addWidget(m_routePrimary);
++    v->addWidget(m_routeSecondary);
++    h->addLayout(v, 1);
++    auto * start = new QPushButton(Tr("Start", "Start"));
++    start->setObjectName("utRouteStart");
++    start->setCursor(Qt::PointingHandCursor);
++    m_routeStart = start;
++    connect(start, &QAbstractButton::clicked, this, [this]
++    {
++      if (m_actions.followRoute)
++        m_actions.followRoute();
++    });
++    h->addWidget(start, 0, Qt::AlignVCenter);
++    auto * close = new RoundButton("close", 36);
++    close->setObjectName("utRouteClose");
++    close->SetFlat(true);
++    connect(close, &QAbstractButton::clicked, this, [this]
++    {
++      if (m_actions.clearRoute)
++        m_actions.clearRoute();
++    });
++    h->addWidget(close, 0, Qt::AlignVCenter);
++  }
++  m_routeCard->hide();
++
++  BuildMenu();
++  BuildLayers();
++
++  // Search page: full screen, above everything else.
++  m_searchPage = new QWidget(this);
++  m_searchPage->setObjectName("utSearchPage");
++  m_searchPage->setAutoFillBackground(true);
++  {
++    auto * v = new QVBoxLayout(m_searchPage);
++    v->setContentsMargins(0, kTop - 8, 0, 0);
++    m_searchPanel = new SearchPanel(m_map, m_searchPage);
++    v->addWidget(m_searchPanel);
++    connect(m_searchPanel, &SearchPanel::CloseRequested, this, [this] { CloseSearch(); });
++    connect(m_searchPanel, &SearchPanel::ResultActivated, this, [this] { CloseSearch(); });
++  }
++  m_searchPage->hide();
++
++  connect(&ut::Theme::Instance(), &ut::Theme::DarkChanged, this, [this] { ApplyStyle(); });
++  ApplyStyle();
++  RefreshModes();
++  Relayout();
++}
++
++void MapUi::BuildMenu()
++{
++  m_menuCard = new Card(this);
++  m_menuCard->setObjectName("utMenuCard");
++  auto * v = new QVBoxLayout(m_menuCard);
++  v->setContentsMargins(4, 8, 4, 8);
++  v->setSpacing(0);
++
++  auto const add = [this, v](char const * objectName, QString const & icon, QString const & text,
++                             std::function<void()> const & fn)
++  {
++    auto * row = new RowButton(icon, text, m_menuCard);
++    row->setObjectName(objectName);
++    connect(row, &QAbstractButton::clicked, this, [this, fn]
++    {
++      CloseCards();
++      if (fn)
++        fn();
++    });
++    v->addWidget(row);
++    return row;
++  };
++
++  add("utMenuAddPlace", "plus", Tr("Add place to OpenStreetMap", "Ort zu OpenStreetMap hinzufügen"),
++      [this] { if (m_actions.createFeature) m_actions.createFeature(); });
++  add("utMenuDownload", "download", Tr("Download maps", "Karten herunterladen"),
++      [this] { if (m_actions.showDownloader) m_actions.showDownloader(); });
++  add("utMenuBookmarks", "list", Tr("Bookmarks and tracks", "Lesezeichen und Tracks"),
++      [this] { if (m_actions.showBookmarks) m_actions.showBookmarks(); });
++  add("utMenuRoutingSettings", "route_to", Tr("Routing options", "Routenoptionen"),
++      [this] { if (m_actions.showRoutingSettings) m_actions.showRoutingSettings(); });
++  m_rulerRow = new RowButton("ruler", Tr("Ruler", "Lineal"), m_menuCard);
++  m_rulerRow->setObjectName("utMenuRuler");
++  m_rulerRow->setCheckable(true);
++  connect(m_rulerRow, &QAbstractButton::toggled, this, [this](bool on)
++  {
++    CloseCards();
++    if (m_actions.ruler)
++      m_actions.ruler(on);
++  });
++  v->addWidget(m_rulerRow);
++  add("utMenuOsm", "person", Tr("OpenStreetMap login", "OpenStreetMap-Anmeldung"),
++      [this] { if (m_actions.osmLogin) m_actions.osmLogin(); });
++  add("utMenuSettings", "gear", Tr("Settings", "Einstellungen"),
++      [this] { if (m_actions.showPreferences) m_actions.showPreferences(); });
++  add("utMenuAbout", "info", Tr("About CoMaps", "Über CoMaps"),
++      [this] { if (m_actions.showAbout) m_actions.showAbout(); });
++  m_menuCard->hide();
++}
++
++void MapUi::BuildLayers()
++{
++  m_layersCard = new Card(this);
++  m_layersCard->setObjectName("utLayersCard");
++  auto * v = new QVBoxLayout(m_layersCard);
++  v->setContentsMargins(4, 8, 4, 8);
++  v->setSpacing(0);
++
++  struct Layer
++  {
++    char const * objectName;
++    char const * icon;
++    QString text;
++  };
++  Layer const layers[] = {
++      {"utLayerOutdoor", "mountain", Tr("Outdoor", "Outdoor")},
++      {"utLayerContours", "contour", Tr("Contour lines", "Höhenlinien")},
++      {"utLayer3d", "cube", Tr("3D buildings", "3D-Gebäude")},
++      {"utLayerTransit", "publictransport", Tr("Transit lines", "ÖPNV-Linien")},
++  };
++  for (size_t i = 0; i < std::size(layers); ++i)
++  {
++    auto * row = new RowButton(layers[i].icon, layers[i].text, m_layersCard);
++    row->setObjectName(layers[i].objectName);
++    row->setCheckable(true);
++    v->addWidget(row);
++    m_layerRows.push_back(row);
++    connect(row, &QAbstractButton::clicked, this, [this, i](bool on)
++    {
++      Framework & fw = GetFramework();
++      switch (i)
++      {
++      case 0: fw.SetOutdoorLayer(on); break;
++      case 1: fw.SetContourLinesLayer(on); break;
++      case 2: fw.SetBuildings3d(on); break;
++      case 3: fw.PublicTransportMapModeSetTransitLines(on); break;
++      }
++      m_map->update();
++    });
++  }
++  m_layersCard->hide();
++}
++
++void MapUi::UpdateLayerChecks()
++{
++  if (m_layerRows.size() < 4)
++    return;
++  Framework & fw = GetFramework();
++  bool const values[] = {fw.HasOutdoorLayer(), fw.HasContourLinesLayer(), fw.HasBuildings3d(),
++                         fw.PublicTransportMapModeHasTransitLines()};
++  for (size_t i = 0; i < 4; ++i)
++  {
++    QSignalBlocker block(m_layerRows[i]);
++    m_layerRows[i]->setChecked(values[i]);
++  }
++}
++
++void MapUi::ApplyStyle()
++{
++  Style const & st = CurrentStyle();
++  qApp->setStyleSheet(DialogStyleSheet());
++  if (m_searchPage)
++  {
++    QPalette pal = m_searchPage->palette();
++    QColor bg = st.panel;
++    bg.setAlpha(255);
++    pal.setColor(QPalette::Window, bg);
++    m_searchPage->setPalette(pal);
++  }
++  if (m_countryButton)
++  {
++    bool const progress = m_countryState == CountryState::Downloading;
++    m_countryButton->setStyleSheet(
++        QString("QPushButton#utCountryButton { background: %1; color: %2; border: none; border-radius: 22px;"
++                " padding: 0 22px; font-size: 16px; font-weight: bold; min-height: 44px; }"
++                "QPushButton#utCountryButton:pressed { background: %3; }")
++            .arg(progress ? Rgba(st.panel) : Hex(st.accent), progress ? Hex(st.text) : QString("white"),
++                 Hex(st.panelPressed)));
++  }
++  if (m_routeStart)
++  {
++    m_routeStart->setStyleSheet(
++        QString("QPushButton#utRouteStart { background: %1; color: white; border: none; border-radius: 12px;"
++                " padding: 0 22px; font-size: 17px; font-weight: bold; min-height: 44px; }"
++                "QPushButton#utRouteStart:pressed { background: %2; }"
++                "QPushButton#utRouteStart:disabled { background: %3; color: %4; }")
++            .arg(Hex(st.accent), Hex(st.accent.darker(130)), Hex(st.field), Hex(st.secondary)));
++    m_routePrimary->setStyleSheet(QString("color: %1; background: transparent;").arg(Hex(st.text)));
++    m_routeSecondary->setStyleSheet(QString("color: %1; background: transparent;").arg(Hex(st.secondary)));
++  }
++  for (auto * w : findChildren<QWidget *>())
++    w->update();
++}
++
++void MapUi::RefreshModes()
++{
++  if (m_modes)
++    m_modes->SetMode(GetFramework().CurrentMapMode());
++}
++
++void MapUi::SetLocationMode(location::EMyPositionMode mode)
++{
++  if (!m_locationButton)
++    return;
++  Style const & st = CurrentStyle();
++  switch (mode)
++  {
++  case location::PendingPosition:
++    m_locationButton->SetIcon("location");
++    m_locationButton->SetIconColor(st.secondary);
++    break;
++  case location::NotFollowNoPosition:
++    m_locationButton->SetIcon("location");
++    m_locationButton->SetIconColor(st.text);
++    break;
++  case location::NotFollow:
++    m_locationButton->SetIcon("location");
++    m_locationButton->SetIconColor(st.locationBlue);
++    break;
++  case location::Follow:
++  case location::FollowAndRotate:
++    m_locationButton->SetIcon("location_fill");
++    m_locationButton->SetIconColor(st.locationBlue);
++    break;
++  }
++}
++
++void MapUi::SetLocationEnabled(bool enabled)
++{
++  if (m_locationButton)
++    m_locationButton->setEnabled(enabled);
++}
++
++void MapUi::SetCountryState(CountryState state, QString const & text)
++{
++  if (!m_countryButton)
++    return;
++  bool const styleChanged = (state == CountryState::Downloading) != (m_countryState == CountryState::Downloading);
++  m_countryState = state;
++  m_countryButton->setText(text);
++  if (styleChanged)
++    ApplyStyle();
++  Relayout();
++}
++
++void MapUi::ShowRoute(QString const & primary, QString const & secondary, bool error, bool canStart)
++{
++  if (!m_routeCard)
++    return;
++  m_routePrimary->setText(primary);
++  m_routeSecondary->setText(secondary);
++  m_routeSecondary->setVisible(!secondary.isEmpty());
++  m_routeStart->setVisible(!error);
++  m_routeStart->setEnabled(canStart);
++  m_routeWanted = true;
++  Relayout();
++}
++
++void MapUi::HideRoute()
++{
++  m_routeWanted = false;
++  Relayout();
++}
++
++void MapUi::ToggleCard(Card * card)
++{
++  if (!card)
++    return;
++  bool const show = !card->isVisible();
++  CloseCards();
++  if (!show)
++    return;
++  m_scrim->show();
++  m_scrim->raise();
++  card->show();
++  card->raise();
++  Relayout();
++}
++
++void MapUi::CloseCards()
++{
++  if (m_menuCard)
++    m_menuCard->hide();
++  if (m_layersCard)
++    m_layersCard->hide();
++  if (m_scrim)
++    m_scrim->hide();
++}
++
++bool MapUi::eventFilter(QObject * obj, QEvent * ev)
++{
++  if (obj == m_scrim && ev->type() == QEvent::MouseButtonPress)
++  {
++    CloseCards();
++    return true;
++  }
++  return QWidget::eventFilter(obj, ev);
++}
++
++void MapUi::resizeEvent(QResizeEvent * e)
++{
++  QWidget::resizeEvent(e);
++  Relayout();
++}
++
++// --- Place page (bottom sheet) ------------------------------------------------------
++
++void MapUi::ShowPlace(place_page::Info const & info, search::ReverseGeocoder::Address const & address)
++{
++  if (!m_initialized)
++    return;
++  CloseCards();
++  if (m_sheet)
++  {
++    m_sheet->hide();
++    m_sheet->deleteLater();
++    m_sheet = nullptr;
++  }
++  Style const & st = CurrentStyle();
++  Framework & fw = GetFramework();
++
++  m_sheet = new Card(this, true /* topOnly */);
++  m_sheet->setObjectName("utPlaceSheet");
++  auto * v = new QVBoxLayout(m_sheet);
++  v->setContentsMargins(18, 8, 14, 4);
++  v->setSpacing(4);
++
++  // Grabber.
++  auto * grabber = new QFrame(m_sheet);
++  grabber->setFixedSize(38, 5);
++  grabber->setStyleSheet(QString("background: %1; border-radius: 2px;").arg(Hex(st.separator)));
++  v->addWidget(grabber, 0, Qt::AlignHCenter);
++
++  // Header: title, type, distance, close.
++  {
++    auto * h = new QHBoxLayout();
++    h->setSpacing(8);
++    auto * left = new QVBoxLayout();
++    left->setSpacing(2);
++    QString title = QString::fromStdString(info.GetTitle());
++    QString subtitle = QString::fromStdString(info.GetSubtitle());
++    if (title.isEmpty())
++    {
++      title = subtitle.isEmpty() ? Tr("Selected point", "Ausgewählter Punkt") : subtitle;
++      subtitle.clear();
++    }
++    QLabel * titleLabel = MakeLabel(title, 24, st.text, true);
++    titleLabel->setObjectName("utPlaceTitle");
++    left->addWidget(titleLabel);
++    if (auto const secondary = info.GetSecondaryTitle(); !secondary.empty())
++      left->addWidget(MakeLabel(QString::fromStdString(secondary), 15, st.secondary));
++    if (!subtitle.isEmpty())
++      left->addWidget(MakeLabel(subtitle, 15, st.secondary));
++    h->addLayout(left, 1);
++
++    auto * right = new QVBoxLayout();
++    right->setSpacing(4);
++    auto * close = new RoundButton("close", 32);
++    close->setObjectName("utPlaceClose");
++    close->SetFlat(true);
++    connect(close, &QAbstractButton::clicked, this, [this] { m_map->CloseCurrentPlace(); });
++    right->addWidget(close, 0, Qt::AlignRight);
++    if (auto const pos = fw.GetCurrentPosition(); pos && !info.IsMyPosition())
++    {
++      auto const ll = mercator::ToLatLon(*pos);
++      platform::Distance dist;
++      double azimut = 0;
++      if (fw.GetDistanceAndAzimut(info.GetMercator(), ll.m_lat, ll.m_lon, -1.0, dist, azimut))
++      {
++        QLabel * d = MakeLabel(QString::fromStdString(dist.ToString()), 15, st.accent, true);
++        d->setWordWrap(false);
++        right->addWidget(d, 0, Qt::AlignRight);
++      }
++    }
++    right->addStretch(1);
++    h->addLayout(right);
++    v->addLayout(h);
++  }
++
++  // Details.
++  auto * content = new QWidget();
++  content->setObjectName("utPlaceDetails");
++  content->setStyleSheet("background: transparent;");
++  auto * cv = new QVBoxLayout(content);
++  cv->setContentsMargins(0, 0, 4, 0);
++  cv->setSpacing(0);
++  int rows = 0;
++  auto const addRow = [&](QString const & icon, QString const & html, bool links = false)
++  {
++    if (html.trimmed().isEmpty())
++      return;
++    if (rows++ > 0)
++    {
++      cv->addWidget(Separator());
++    }
++    cv->addWidget(DetailRow(icon, html, links));
++  };
++  using EType = feature::Metadata::EType;
++  auto const meta = [&info](EType t) { return QString::fromUtf8(info.GetMetadata(t).data(), info.GetMetadata(t).size()); };
++
++  if (auto const population = info.GetPopulation(); !population.empty())
++  {
++    bool ok = false;
++    qlonglong const n = QString::fromStdString(population).toLongLong(&ok);
++    QString const number = ok ? QLocale(IsGerman() ? QLocale::German : QLocale::English).toString(n)
++                              : QString::fromStdString(population);
++    addRow("people", Tr("%1 inhabitants", "%1 Einwohner").arg(number));
++  }
++  addRow("pin", QString::fromStdString(address.FormatAddress()));
++  if (auto const oh = info.GetOpeningHours(); !oh.empty())
++    addRow("clock", QString::fromUtf8(oh.data(), oh.size()));
++  addRow("cuisine", QString::fromStdString(info.FormatCuisines()));
++  if (auto const phone = meta(EType::FMD_PHONE_NUMBER); !phone.isEmpty())
++    addRow("phone", Link("tel:" + phone, phone), true);
++  if (auto const web = meta(EType::FMD_WEBSITE); !web.isEmpty())
++    addRow("globe", Link(web, web), true);
++  if (auto const mail = meta(EType::FMD_EMAIL); !mail.isEmpty())
++    addRow("mail", Link("mailto:" + mail, mail), true);
++  addRow("info", meta(EType::FMD_OPERATOR));
++  if (info.HasWifi())
++    addRow("wifi", Tr("Wi-Fi", "WLAN"));
++  if (auto const level = meta(EType::FMD_LEVEL); !level.isEmpty())
++    addRow("info", Tr("Level %1", "Etage %1").arg(level));
++  if (auto const & description = info.GetWikiDescription(); !description.empty())
++  {
++    QString text = QString::fromStdString(description);
++    text.remove(QRegularExpression("<[^>]*>"));
++    if (text.size() > 400)
++      text = text.left(397) + "…";
++    addRow("info", text);
++  }
++  {
++    ms::LatLon const ll = info.GetLatLon();
++    addRow("crosshair", QString("%1, %2").arg(ll.m_lat, 0, 'f', 6).arg(ll.m_lon, 0, 'f', 6));
++  }
++  cv->addStretch(1);
++
++  m_sheetScroll = new QScrollArea(m_sheet);
++  m_sheetScroll->setObjectName("utPlaceScroll");
++  m_sheetScroll->setFrameShape(QFrame::NoFrame);
++  m_sheetScroll->setWidgetResizable(true);
++  m_sheetScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
++  m_sheetScroll->setStyleSheet("QScrollArea { background: transparent; }");
++  m_sheetScroll->viewport()->setAutoFillBackground(false);
++  m_sheetScroll->setWidget(content);
++  EnableFingerScrolling(m_sheetScroll->viewport());
++  m_sheetContent = content;
++  v->addWidget(Separator(m_sheet));
++  v->addWidget(m_sheetScroll, 1);
++  v->addWidget(Separator(m_sheet));
++
++  // Actions.
++  {
++    auto * h = new QHBoxLayout();
++    h->setSpacing(0);
++    h->setContentsMargins(0, 2, 0, 0);
++    auto const action = [&](char const * objectName, QString const & icon, QString const & text,
++                            std::function<void()> fn)
++    {
++      auto * b = new ActionButton(icon, text, m_sheet);
++      b->setObjectName(objectName);
++      connect(b, &QAbstractButton::clicked, this, [fn] { fn(); });
++      h->addWidget(b, 1);
++    };
++    action("utPlaceRouteFrom", "route_from", Tr("Route from", "Route von"),
++           [this] { m_map->RouteFromCurrentPlace(RouteMarkType::Start); });
++    bool const routing = !fw.GetRoutingManager().GetRoutePoints().empty();
++    if (routing)
++      action("utPlaceAddStop", "stop", Tr("Add stop", "Zwischenstopp"),
++             [this] { m_map->RouteFromCurrentPlace(RouteMarkType::Intermediate); });
++    bool const bookmarked = info.IsBookmark();
++    action("utPlaceBookmark", bookmarked ? "star" : "star_outline",
++           bookmarked ? Tr("Saved", "Gespeichert") : Tr("Save", "Speichern"),
++           [this] { m_map->ToggleBookmarkForCurrentPlace(); });
++    action("utPlaceRouteTo", "route_to", Tr("Route to", "Route nach"),
++           [this] { m_map->RouteFromCurrentPlace(RouteMarkType::Finish); });
++    if (info.ShouldShowEditPlace() && !routing)
++      action("utPlaceEdit", "edit", Tr("Edit", "Bearbeiten"), [this] { m_map->EditCurrentPlace(); });
++    v->addLayout(h);
++  }
++
++  m_sheet->show();
++  m_sheet->raise();
++  Relayout();
++}
++
++void MapUi::HidePlace()
++{
++  if (m_sheet)
++  {
++    m_sheet->hide();
++    m_sheet->deleteLater();
++    m_sheet = nullptr;
++    m_sheetScroll = nullptr;
++    m_sheetContent = nullptr;
++  }
++  Relayout();
++}
++
++int MapUi::SheetHeight() const
++{
++  if (!m_sheet || !m_sheetScroll || !m_sheetContent)
++    return 0;
++  // Everything but the details, plus as much of the details as fits in ~60% of the screen.
++  int const content = m_sheetContent->sizeHint().height();
++  m_sheetScroll->setMinimumHeight(0);
++  m_sheetScroll->setMaximumHeight(QWIDGETSIZE_MAX);
++  int const fixed = m_sheet->layout()->sizeHint().height() - m_sheetScroll->sizeHint().height();
++  int const maxTotal = height() * 62 / 100;
++  int const scroll = std::max(0, std::min(content, maxTotal - fixed));
++  m_sheetScroll->setFixedHeight(scroll);
++  return fixed + scroll;
++}
++
++// --- Search page -----------------------------------------------------------------------
++
++void MapUi::OpenSearch()
++{
++  if (!m_searchPage)
++    return;
++  CloseCards();
++  m_searchPage->setGeometry(rect());
++  m_searchPage->show();
++  m_searchPage->raise();
++  m_searchPanel->FocusInput();
++}
++
++void MapUi::CloseSearch()
++{
++  if (!m_searchPage || !m_searchPage->isVisible())
++    return;
++  m_searchPage->hide();
++  if (QWidget * focus = QApplication::focusWidget())
++    focus->clearFocus();
++  QGuiApplication::inputMethod()->hide();
++  m_map->setFocus();
++}
++
++// --- Layout --------------------------------------------------------------------------
++
++void MapUi::Relayout()
++{
++  int const w = width();
++  int const h = height();
++  m_map->setGeometry(0, 0, w, h);
++  if (!m_initialized)
++    return;
++
++  m_scrim->setGeometry(0, 0, w, h);
++
++  // Top row: menu, transport modes, layers.
++  m_menuButton->move(kMargin, kTop);
++  m_layersButton->move(w - kMargin - kButton, kTop);
++  m_modes->move((w - m_modes->width()) / 2, kTop);
++  // Too narrow for all three in a row: modes go below.
++  if (m_modes->width() > w - 2 * (kMargin + kButton + 8))
++    m_modes->move((w - m_modes->width()) / 2, kTop + kButton + 8);
++
++  int const cardWidth = std::min(330, w - 2 * kMargin);
++  m_menuCard->setFixedWidth(cardWidth);
++  m_menuCard->adjustSize();
++  m_menuCard->move(kMargin, kTop + kButton + 8);
++  int const layersWidth = std::min(270, w - 2 * kMargin);
++  m_layersCard->setFixedWidth(layersWidth);
++  m_layersCard->adjustSize();
++  m_layersCard->move(w - kMargin - layersWidth, kTop + kButton + 8);
++
++  bool const sheet = m_sheet != nullptr;
++  int bottomEdge = h - kBottom;  // everything below is taken by a sheet or card
++
++  if (sheet)
++  {
++    int const sh = SheetHeight() + kBottom;
++    m_sheet->setGeometry(0, h - sh, w, sh);
++    bottomEdge = h - sh - 10;
++  }
++
++  // The route card yields to the place page.
++  m_routeCard->setVisible(m_routeWanted && !sheet);
++  if (m_routeCard->isVisible())
++  {
++    int const rh = std::max(m_routeCard->sizeHint().height(), 72);
++    m_routeCard->setGeometry(kMargin, h - kBottom - rh, w - 2 * kMargin, rh);
++    bottomEdge = h - kBottom - rh - 10;
++  }
++
++  bool const bottomRow = !sheet && !m_routeCard->isVisible();
++  m_bookmarksButton->setVisible(bottomRow);
++  m_searchPill->setVisible(bottomRow);
++  int const rowY = bottomRow ? h - kBottom - kButton : bottomEdge - kButton;
++  m_bookmarksButton->move(kMargin, rowY);
++  int const pillX = kMargin + kButton + 10;
++  m_searchPill->setGeometry(pillX, rowY, w - 2 * pillX, kButton);
++  m_locationButton->move(w - kMargin - kButton, rowY);
++
++  // Map download banner above the bottom controls.
++  bool const country = m_countryState != CountryState::None && !sheet;
++  m_countryButton->setVisible(country);
++  if (country)
++  {
++    int const cw = std::min(m_countryButton->sizeHint().width(), w - 2 * kMargin);
++    m_countryButton->setGeometry((w - cw) / 2, rowY - 12 - 44, cw, 44);
++  }
++
++  if (m_searchPage && m_searchPage->isVisible())
++    m_searchPage->setGeometry(0, 0, w, h);
++
++  // Stacking: map, controls, scrim, cards, sheet, search page.
++  for (QWidget * wdg : {static_cast<QWidget *>(m_menuButton), static_cast<QWidget *>(m_modes),
++                        static_cast<QWidget *>(m_layersButton), static_cast<QWidget *>(m_bookmarksButton),
++                        static_cast<QWidget *>(m_searchPill), static_cast<QWidget *>(m_locationButton),
++                        static_cast<QWidget *>(m_countryButton), static_cast<QWidget *>(m_routeCard)})
++    wdg->raise();
++  if (m_scrim->isVisible())
++    m_scrim->raise();
++  if (m_menuCard->isVisible())
++    m_menuCard->raise();
++  if (m_layersCard->isVisible())
++    m_layersCard->raise();
++  if (m_sheet)
++    m_sheet->raise();
++  if (m_searchPage && m_searchPage->isVisible())
++    m_searchPage->raise();
++}
++}  // namespace mobile
++}  // namespace qt
+diff --git a/qt/ut_mobile_ui.hpp b/qt/ut_mobile_ui.hpp
+new file mode 100644
+index 0000000..63e7d82
+--- /dev/null
++++ b/qt/ut_mobile_ui.hpp
+@@ -0,0 +1,239 @@
++#pragma once
++
++// ut-comaps: phone user interface for the CoMaps Qt frontend, modelled on the
++// CoMaps iPhone app: the map fills the screen, round floating buttons (menu,
++// transport mode, layers, bookmarks, search, my position), a full screen
++// search page and a bottom sheet for the selected place.
++//
++// All parts are child widgets of one container (the main window's central
++// widget), siblings of the map widget. The map accepts touch events itself,
++// so controls must not be children of it (touches would go to the map).
++
++#include "map/framework.hpp"
++#include "map/place_page_info.hpp"
++
++#include "platform/location.hpp"
++
++#include "search/reverse_geocoder.hpp"
++
++#include <QtGui/QColor>
++#include <QtWidgets/QAbstractButton>
++#include <QtWidgets/QWidget>
++
++#include <functional>
++#include <vector>
++
++class QLabel;
++class QVBoxLayout;
++class QScrollArea;
++
++namespace qt
++{
++class DrawWidget;
++class SearchPanel;
++
++namespace mobile
++{
++// German or English, following the user interface language.
++QString Tr(char const * en, char const * de);
++
++struct Style
++{
++  bool dark = false;
++  QColor panel;         // cards and round buttons
++  QColor panelPressed;
++  QColor field;         // text fields on a panel
++  QColor text;
++  QColor secondary;
++  QColor separator;
++  QColor accent;        // CoMaps green
++  QColor selected;      // selected transport mode
++  QColor locationBlue;
++};
++Style const & CurrentStyle();
++
++// Draws a named icon (vector) into r.
++void PaintIcon(QPainter & p, QString const & name, QRectF const & r, QColor const & color);
++
++// Stylesheet for the dialogs (downloader, bookmarks, preferences, ...).
++QString DialogStyleSheet();
++// Kinetic finger scrolling for a scroll area viewport.
++void EnableFingerScrolling(QWidget * viewport);
++
++class IconView : public QWidget
++{
++public:
++  IconView(QString name, int size, QWidget * parent = nullptr);
++  void SetIcon(QString name) { m_name = std::move(name); update(); }
++  void SetColor(QColor c) { m_color = c; update(); }
++
++protected:
++  void paintEvent(QPaintEvent *) override;
++
++private:
++  QString m_name;
++  QColor m_color;
++};
++
++class RoundButton : public QAbstractButton
++{
++public:
++  RoundButton(QString icon, int diameter, QWidget * parent = nullptr);
++  void SetIcon(QString icon) { m_icon = std::move(icon); update(); }
++  void SetIconColor(QColor c) { m_iconColor = c; update(); }
++  void SetFlat(bool flat) { m_flat = flat; update(); }
++  QSize sizeHint() const override { return {m_diameter, m_diameter}; }
++
++protected:
++  void paintEvent(QPaintEvent *) override;
++
++private:
++  QString m_icon;
++  QColor m_iconColor;
++  int m_diameter;
++  bool m_flat = false;
++};
++
++// A row in the menu or layers card: icon + text (+ check mark when checkable).
++class RowButton : public QAbstractButton
++{
++public:
++  RowButton(QString icon, QString text, QWidget * parent = nullptr);
++  QSize sizeHint() const override;
++
++protected:
++  void paintEvent(QPaintEvent *) override;
++
++private:
++  QString m_icon;
++};
++
++// Rounded panel; with topOnly only the upper corners are round (bottom sheet).
++class Card : public QWidget
++{
++public:
++  explicit Card(QWidget * parent = nullptr, bool topOnly = false);
++
++protected:
++  void paintEvent(QPaintEvent *) override;
++
++private:
++  bool m_topOnly;
++};
++
++class ModeSelector : public QWidget
++{
++public:
++  ModeSelector(std::function<void(MapMode)> onSelect, QWidget * parent = nullptr);
++  void SetMode(MapMode mode) { m_mode = mode; update(); }
++  QSize sizeHint() const override;
++
++protected:
++  void paintEvent(QPaintEvent *) override;
++  void mouseReleaseEvent(QMouseEvent * e) override;
++
++private:
++  std::function<void(MapMode)> m_onSelect;
++  MapMode m_mode = MapMode::Default;
++};
++
++class MapUi : public QWidget
++{
++  Q_OBJECT
++
++public:
++  struct Actions
++  {
++    std::function<void(MapMode)> setMapMode;
++    std::function<void()> myPosition;
++    std::function<void()> showDownloader;
++    std::function<void()> showBookmarks;
++    std::function<void()> showPreferences;
++    std::function<void()> showRoutingSettings;
++    std::function<void()> showAbout;
++    std::function<void()> osmLogin;
++    std::function<void()> createFeature;
++    std::function<void(bool)> ruler;
++    std::function<void()> download;
++    std::function<void()> retryDownload;
++    std::function<void()> cancelDownload;
++    std::function<void()> followRoute;
++    std::function<void()> clearRoute;
++  };
++
++  enum class CountryState
++  {
++    None,
++    Download,
++    Downloading,
++    Retry
++  };
++
++  MapUi(DrawWidget * map, QWidget * parent);
++
++  // Creates the controls; call once the main window is set up.
++  void Init(Actions actions);
++
++  void SetLocationMode(location::EMyPositionMode mode);
++  void SetLocationEnabled(bool enabled);
++  void SetCountryState(CountryState state, QString const & text);
++  void RefreshModes();
++
++  void ShowRoute(QString const & primary, QString const & secondary, bool error, bool canStart);
++  void HideRoute();
++
++  void ShowPlace(place_page::Info const & info, search::ReverseGeocoder::Address const & address);
++  void HidePlace();
++
++  void OpenSearch();
++  void CloseSearch();
++
++protected:
++  void resizeEvent(QResizeEvent * e) override;
++  bool eventFilter(QObject * obj, QEvent * ev) override;
++
++private:
++  Framework & GetFramework() const;
++  void Relayout();
++  void ApplyStyle();
++  void ToggleCard(Card * card);
++  void CloseCards();
++  void BuildMenu();
++  void BuildLayers();
++  void UpdateLayerChecks();
++  int SheetHeight() const;
++
++  DrawWidget * m_map;
++  Actions m_actions;
++  bool m_initialized = false;
++
++  QWidget * m_scrim = nullptr;  // closes the cards when the map is tapped
++  RoundButton * m_menuButton = nullptr;
++  RoundButton * m_layersButton = nullptr;
++  RoundButton * m_bookmarksButton = nullptr;
++  RoundButton * m_locationButton = nullptr;
++  ModeSelector * m_modes = nullptr;
++  QAbstractButton * m_searchPill = nullptr;
++  Card * m_menuCard = nullptr;
++  Card * m_layersCard = nullptr;
++  std::vector<RowButton *> m_layerRows;
++  RowButton * m_rulerRow = nullptr;
++
++  QAbstractButton * m_countryButton = nullptr;
++  CountryState m_countryState = CountryState::None;
++
++  Card * m_routeCard = nullptr;
++  QLabel * m_routePrimary = nullptr;
++  QLabel * m_routeSecondary = nullptr;
++  QAbstractButton * m_routeStart = nullptr;
++
++  bool m_routeWanted = false;
++
++  Card * m_sheet = nullptr;
++  QScrollArea * m_sheetScroll = nullptr;
++  QWidget * m_sheetContent = nullptr;
++  QWidget * m_searchPage = nullptr;
++  SearchPanel * m_searchPanel = nullptr;
++};
++}  // namespace mobile
++}  // namespace qt
+diff --git a/qt/ut_test_hook.cpp b/qt/ut_test_hook.cpp
+new file mode 100644
+index 0000000..423b689
+--- /dev/null
++++ b/qt/ut_test_hook.cpp
+@@ -0,0 +1,349 @@
++// ut-comaps: remote control for UI tests on the phone.
++//
++// Only active when UT_COMAPS_TEST is set to a file path. Commands written to
++// that file (one per line) are executed in order, e.g. from adb:
++//   echo "click utMenuButton" >> $UT_COMAPS_TEST
++// Commands: click <objectName> | clicktext <text> | tap <x> <y> | drag <x1> <y1> <x2> <y2>
++//           type <text> | key <qt key code> | back | dump | sleep <ms> | <registered command> ...
++// Coordinates are logical pixels in the active window. "dump" writes the visible
++// widgets with their geometry to <file>.out.
++#include "qt/ut_test_hook.hpp"
++
++#include <QtCore/QFile>
++#include <QtCore/QFileInfo>
++#include <QtCore/QPointer>
++#include <QtCore/QTextStream>
++#include <QtCore/QTimer>
++#include <QtGui/QKeyEvent>
++#include <QtGui/QMouseEvent>
++#include <QtWidgets/QAbstractButton>
++#include <QtWidgets/QApplication>
++#include <QtWidgets/QDialog>
++#include <QtWidgets/QLabel>
++#include <QtWidgets/QLineEdit>
++#include <QtWidgets/QListWidget>
++#include <QtWidgets/QWidget>
++
++#include <map>
++
++namespace ut_test
++{
++namespace
++{
++std::map<QString, Command> & Registry()
++{
++  static std::map<QString, Command> registry;
++  return registry;
++}
++
++QWidget * ActiveWindow()
++{
++  if (QWidget * w = QApplication::activePopupWidget())
++    return w;
++  if (QWidget * w = QApplication::activeModalWidget())
++    return w;
++  if (QWidget * w = QApplication::activeWindow())
++    return w;
++  QWidget * best = nullptr;
++  for (QWidget * w : QApplication::topLevelWidgets())
++    if (w->isVisible() && (!best || w->width() * w->height() > best->width() * best->height()))
++      best = w;
++  return best;
++}
++
++QWidget * FindByName(QString const & name)
++{
++  // Prefer widgets in the active (modal) window.
++  QWidget * window = ActiveWindow();
++  if (window)
++  {
++    if (window->objectName() == name)
++      return window;
++    for (QWidget * w : window->findChildren<QWidget *>(name))
++      if (w->isVisible())
++        return w;
++  }
++  for (QWidget * w : QApplication::allWidgets())
++    if (w->objectName() == name && w->isVisible())
++      return w;
++  return nullptr;
++}
++
++void SendClick(QWidget * target, QPointF const & local, int holdMs = 60)
++{
++  QPointer<QWidget> w(target);
++  QPointF const scene = target->mapTo(target->window(), local.toPoint());
++  QPointF const global = target->mapToGlobal(local.toPoint());
++  QMouseEvent press(QEvent::MouseButtonPress, local, scene, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
++  QApplication::sendEvent(target, &press);
++  QTimer::singleShot(holdMs, [w, local, scene, global]
++  {
++    if (!w)
++      return;
++    QMouseEvent release(QEvent::MouseButtonRelease, local, scene, global, Qt::LeftButton, Qt::NoButton,
++                        Qt::NoModifier);
++    QApplication::sendEvent(w, &release);
++  });
++}
++
++void Dump(QWidget * w, QTextStream & out, int depth)
++{
++  if (!w->isVisible())
++    return;
++  QRect const g(w->mapTo(w->window(), QPoint(0, 0)), w->size());
++  QString text;
++  if (auto * b = qobject_cast<QAbstractButton *>(w))
++    text = b->text();
++  else if (auto * l = qobject_cast<QLabel *>(w))
++    text = l->text().left(60);
++  else if (auto * e = qobject_cast<QLineEdit *>(w))
++    text = e->text();
++  out << QString(depth * 2, ' ') << w->metaObject()->className() << " '" << w->objectName() << "' " << g.x() << ","
++      << g.y() << " " << g.width() << "x" << g.height();
++  if (!text.isEmpty())
++    out << " \"" << text.simplified() << "\"";
++  out << "\n";
++  for (QObject * child : w->children())
++    if (child->isWidgetType())
++      Dump(static_cast<QWidget *>(child), out, depth + 1);
++}
++
++class Hook : public QObject
++{
++public:
++  explicit Hook(QString path) : QObject(qApp), m_path(std::move(path))
++  {
++    connect(&m_timer, &QTimer::timeout, this, [this] { Poll(); });
++    m_timer.start(150);
++  }
++
++private:
++  void Poll()
++  {
++    if (m_busyUntilNextTick)
++      return;
++    if (m_queue.isEmpty())
++    {
++      QFile f(m_path);
++      if (f.size() <= 0 || !f.open(QIODevice::ReadWrite))
++        return;
++      QString const all = QString::fromUtf8(f.readAll());
++      f.resize(0);
++      f.close();
++      for (QString const & line : all.split('\n', Qt::SkipEmptyParts))
++        m_queue << line.trimmed();
++    }
++    if (m_queue.isEmpty())
++      return;
++    QString const cmd = m_queue.takeFirst();
++    Log("> " + cmd);
++    Run(cmd);
++  }
++
++  void Log(QString const & line)
++  {
++    QFile f(m_path + ".out");
++    if (f.open(QIODevice::Append))
++      f.write((line + "\n").toUtf8());
++  }
++
++  void Pause(int ms)
++  {
++    m_busyUntilNextTick = true;
++    QTimer::singleShot(ms, this, [this] { m_busyUntilNextTick = false; });
++  }
++
++  void Run(QString const & cmd)
++  {
++    QStringList const args = cmd.split(' ', Qt::SkipEmptyParts);
++    if (args.isEmpty())
++      return;
++    QString const & op = args[0];
++    QString const rest = cmd.section(' ', 1);
++
++    if (op == "sleep")
++    {
++      Pause(args.value(1).toInt());
++    }
++    else if (op == "click")
++    {
++      QWidget * w = FindByName(args.value(1));
++      if (!w)
++        return Log("not found: " + args.value(1));
++      QPointer<QWidget> pw(w);
++      // Deferred: the click may open a modal dialog (nested event loop).
++      QTimer::singleShot(0, [pw]
++      {
++        if (!pw)
++          return;
++        if (auto * b = qobject_cast<QAbstractButton *>(pw.data()))
++          b->click();
++        else
++          SendClick(pw, QPointF(pw->width() / 2.0, pw->height() / 2.0));
++      });
++    }
++    else if (op == "clicktext")
++    {
++      QWidget * window = ActiveWindow();
++      QList<QWidget *> candidates = window ? window->findChildren<QWidget *>() : QList<QWidget *>();
++      for (QWidget * w : QApplication::allWidgets())
++        candidates << w;
++      for (QWidget * w : candidates)
++      {
++        if (!w->isVisible())
++          continue;
++        if (auto * b = qobject_cast<QAbstractButton *>(w); b && b->text().contains(rest, Qt::CaseInsensitive))
++        {
++          QPointer<QAbstractButton> pb(b);
++          QTimer::singleShot(0, [pb] { if (pb) pb->click(); });
++          return;
++        }
++        if (auto * list = qobject_cast<QListWidget *>(w))
++        {
++          for (int i = 0; i < list->count(); ++i)
++          {
++            QListWidgetItem * item = list->item(i);
++            QString text = item->text() + " " + item->data(Qt::UserRole).toString();
++            if (QWidget * iw = list->itemWidget(item))
++              for (QLabel * l : iw->findChildren<QLabel *>())
++                text += " " + l->text();
++            if (text.contains(rest, Qt::CaseInsensitive))
++            {
++              QPointer<QListWidget> pl(list);
++              QTimer::singleShot(0, [pl, item] { if (pl) emit pl->itemClicked(item); });
++              return;
++            }
++          }
++        }
++      }
++      Log("text not found: " + rest);
++    }
++    else if (op == "tap" || op == "longtap")
++    {
++      QWidget * window = ActiveWindow();
++      if (!window)
++        return;
++      QPoint const p(args.value(1).toInt(), args.value(2).toInt());
++      QWidget * target = window->childAt(p);
++      if (!target)
++        target = window;
++      Log(QString("tap -> %1 '%2'").arg(target->metaObject()->className(), target->objectName()));
++      SendClick(target, target->mapFrom(window, p), op == "longtap" ? 1200 : 60);
++    }
++    else if (op == "drag")
++    {
++      QWidget * window = ActiveWindow();
++      if (!window)
++        return;
++      QPoint const a(args.value(1).toInt(), args.value(2).toInt());
++      QPoint const b(args.value(3).toInt(), args.value(4).toInt());
++      QWidget * target = window->childAt(a);
++      if (!target)
++        target = window;
++      QPointer<QWidget> pt(target);
++      auto const send = [pt, window](QEvent::Type type, QPoint wp, Qt::MouseButtons buttons)
++      {
++        if (!pt)
++          return;
++        QPointF const local = pt->mapFrom(window, wp);
++        QMouseEvent ev(type, local, QPointF(wp), pt->mapToGlobal(local.toPoint()), Qt::LeftButton, buttons,
++                       Qt::NoModifier);
++        QApplication::sendEvent(pt, &ev);
++      };
++      send(QEvent::MouseButtonPress, a, Qt::LeftButton);
++      int constexpr kSteps = 12;
++      for (int i = 1; i <= kSteps; ++i)
++      {
++        QPoint const p = a + (b - a) * i / kSteps;
++        QTimer::singleShot(i * 25, [send, p] { send(QEvent::MouseMove, p, Qt::LeftButton); });
++      }
++      QTimer::singleShot((kSteps + 1) * 25, [send, b] { send(QEvent::MouseButtonRelease, b, Qt::NoButton); });
++      Pause((kSteps + 4) * 25);
++    }
++    else if (op == "type")
++    {
++      if (auto * edit = qobject_cast<QLineEdit *>(QApplication::focusWidget()))
++        edit->insert(rest);
++      else if (QWidget * f = QApplication::focusWidget())
++      {
++        QKeyEvent press(QEvent::KeyPress, 0, Qt::NoModifier, rest);
++        QApplication::sendEvent(f, &press);
++      }
++      else
++        Log("no focus widget");
++    }
++    else if (op == "key")
++    {
++      if (QWidget * f = QApplication::focusWidget())
++      {
++        QKeyEvent press(QEvent::KeyPress, args.value(1).toInt(), Qt::NoModifier);
++        QApplication::sendEvent(f, &press);
++        QKeyEvent release(QEvent::KeyRelease, args.value(1).toInt(), Qt::NoModifier);
++        QApplication::sendEvent(f, &release);
++      }
++    }
++    else if (op == "back")
++    {
++      if (QWidget * popup = QApplication::activePopupWidget())
++        popup->close();
++      else if (auto * dlg = qobject_cast<QDialog *>(QApplication::activeModalWidget()))
++        QTimer::singleShot(0, dlg, [dlg] { dlg->reject(); });
++      else
++        Log("nothing to go back from");
++    }
++    else if (op == "dump")
++    {
++      QFile f(m_path + ".out");
++      if (!f.open(QIODevice::Append))
++        return;
++      QTextStream out(&f);
++      for (QWidget * w : QApplication::topLevelWidgets())
++        if (w->isVisible())
++        {
++          out << "=== window " << w->metaObject()->className() << " '" << w->objectName() << "' "
++              << w->width() << "x" << w->height() << (w == ActiveWindow() ? " (active)" : "") << "\n";
++          Dump(w, out, 1);
++        }
++    }
++    else if (auto it = Registry().find(op); it != Registry().end())
++    {
++      it->second(args.mid(1));
++    }
++    else
++    {
++      Log("unknown command: " + op);
++    }
++  }
++
++  QString m_path;
++  QTimer m_timer;
++  QStringList m_queue;
++  bool m_busyUntilNextTick = false;
++};
++
++void InstallTestHook()
++{
++  QString const path = qEnvironmentVariable("UT_COMAPS_TEST");
++  if (path.isEmpty())
++    return;
++  // Created once the event loop runs (QApplication exists by then).
++  QTimer::singleShot(0, [path] { new Hook(path); });
++}
++}  // namespace
++
++void RegisterCommand(QString const & name, Command command)
++{
++  Registry()[name] = std::move(command);
++}
++
++bool Enabled()
++{
++  return qEnvironmentVariableIsSet("UT_COMAPS_TEST");
++}
++}  // namespace ut_test
++
++static void UtComapsInstallTestHook()
++{
++  ut_test::InstallTestHook();
++}
++Q_COREAPP_STARTUP_FUNCTION(UtComapsInstallTestHook)
+diff --git a/qt/ut_test_hook.hpp b/qt/ut_test_hook.hpp
+new file mode 100644
+index 0000000..7391cd3
+--- /dev/null
++++ b/qt/ut_test_hook.hpp
+@@ -0,0 +1,16 @@
++#pragma once
++
++// ut-comaps: remote control for UI tests (active only with UT_COMAPS_TEST set).
++#include <QtCore/QString>
++#include <QtCore/QStringList>
++
++#include <functional>
++
++namespace ut_test
++{
++using Command = std::function<void(QStringList const & args)>;
++
++// Adds a command that needs app objects, e.g. "center <lat> <lon> <zoom>".
++void RegisterCommand(QString const & name, Command command);
++bool Enabled();
++}  // namespace ut_test
