@@ -5,7 +5,7 @@
 # hours; GitHub Actions builds it natively in ~15 minutes (warm cache). So:
 #
 #   ./build.sh ci                 start the GitHub build, wait, download the click to build/
-#   ./build.sh release 1.0.0      tag v1.0.0: GitHub builds a release with exactly this
+#   ./build.sh release 0.1.0      tag v0.1.0: GitHub builds a release with exactly this
 #                                 version (for the OpenStore), the click lands in build/
 #   ./build.sh download           download the click of the latest GitHub release to build/
 #   ./build.sh phone [file.click] install the newest click in build/ (or the given one) on
@@ -187,7 +187,7 @@ print(r["id"], r["status"], r["conclusion"])')
 # Release with a clean version (OpenStore): tag v<version> on origin/main.
 release() {
     local version="${1:-}"
-    [[ "$version" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || die "usage: ./build.sh release <version>, e.g. 1.0.0"
+    [[ "$version" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || die "usage: ./build.sh release <version>, e.g. 0.1.0"
     local tag="v$version"
     git -C "$PROJECT_DIR" fetch -q --tags origin
     git -C "$PROJECT_DIR" rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag $tag exists already"

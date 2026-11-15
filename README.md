@@ -27,7 +27,7 @@ Handy-Oberfläche im Stil der CoMaps-App fürs iPhone.
 ```bash
 ./build.sh ci                # auf GitHub bauen lassen (~15 min), Click nach build/ laden
 ./build.sh phone             # per USB/adb auf dem Handy installieren und starten
-./build.sh release 1.0.0     # Release-Build mit sauberer Version (z. B. für den OpenStore)
+./build.sh release 0.1.0     # Release-Build mit sauberer Version (z. B. für den OpenStore)
 ```
 
 Details zu `build.sh` und zum lokalen Build unter [Bauen](#bauen).
@@ -143,7 +143,7 @@ ut-comaps/
 
 | Aufruf | Was passiert |
 |---|---|
-| `./build.sh ci` | startet den GitHub-Build, wartet und lädt das Click nach `build/` (Version `1.0.0.<Lauf>`) |
+| `./build.sh ci` | startet den GitHub-Build, wartet und lädt das Click nach `build/` (Version `0.1.0.<Lauf>`) |
 | `./build.sh release <version>` | setzt das Tag `v<version>`, GitHub baut und veröffentlicht ein Release mit genau dieser Version, das Click landet in `build/` |
 | `./build.sh download` | lädt das Click des neuesten GitHub-Releases nach `build/` |
 | `./build.sh phone [datei.click]` | installiert das neueste Click aus `build/` (oder das angegebene) per adb und startet die App |
@@ -154,7 +154,7 @@ ut-comaps/
 Auf Images ohne `pkcon` (z. B. UT 26.04) installiert `phone` mit `sudo click install`; das Handy
 fragt dann im Terminal nach seinem Passwort.
 
-**OpenStore:** Für einen Upload `./build.sh release 1.0.0` (danach `1.0.1`, `1.1.0` …). Der
+**OpenStore:** Für einen Upload `./build.sh release 0.1.0` (danach `0.1.1`, `0.2.0` …). Der
 OpenStore verlangt bei jedem Upload eine höhere Version als die vorige.
 
 Die folgenden Abschnitte beschreiben, was `build.sh` für den lokalen Build tut – zum Nachvollziehen
@@ -227,7 +227,7 @@ Das baut und packt nach `build/*.click`.
   so etwa 1–2 Stunden statt einer Nacht und bleibt unter dem 6-Stunden-Limit von GitHub.
 - **Start:** manuell unter *Actions → Build click → Run workflow* (optional mit Release) oder
   per Tag: `git tag v0.1.0 && git push --tags` baut und veröffentlicht ein Release.
-- **Version:** Mit Tag `v1.2.3` wird die Click-Version `1.2.3`, sonst `1.0.0.<Laufnummer>`
+- **Version:** Mit Tag `v1.2.3` wird die Click-Version `1.2.3`, sonst `0.1.0.<Laufnummer>`
   (`BASE_VERSION` im Workflow).
 - **Ergebnis:** `ut-comaps_<version>_arm64.click` plus `SHA256SUMS` als Workflow-Artefakt
   (30 Tage) und bei Releases im GitHub-Release, mit Installationsanleitung.
