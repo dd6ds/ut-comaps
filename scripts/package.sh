@@ -119,6 +119,20 @@ for so in libssl.so.3; do
         echo "[ut-comaps] WARNING: $so not found, TLS may fail on the phone." >&2
     fi
 done
+# Positions on Ubuntu Touch come only from lomiri-location-service. Its Qt
+# plugin is built against our Qt (build-lomiri-position.sh) and added after the
+# library bundling on purpose: liblomiri-location-service and dbus-cpp must be
+# the phone's own (they talk to the phone's service). Geoclue does not exist
+# on Ubuntu Touch, so its plugin and the polling fallback are dropped.
+LOMIRI_PLUGIN="${LOMIRI_POSITION_PLUGIN:-build/lomiri-position/out/libqtposition_lomiri.so}"
+if [ -f "$LOMIRI_PLUGIN" ]; then
+    mkdir -p "$CLICK_DIR/lib/plugins/position"
+    install -m 644 "$LOMIRI_PLUGIN" "$CLICK_DIR/lib/plugins/position/"
+    rm -f "$CLICK_DIR/lib/plugins/position/libqtposition_geoclue2.so" \
+          "$CLICK_DIR/lib/plugins/position/libqtposition_positionpoll.so"
+else
+    echo "[ut-comaps] WARNING: $LOMIRI_PLUGIN missing - no GPS on the phone." >&2
+fi
 echo "[ut-comaps] Bundled $(ls "$CLICK_DIR/lib" | grep -c '\.so') libraries."
 
 # --- Build the click (clickable does this itself) -----------------------------

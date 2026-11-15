@@ -56,6 +56,10 @@ if [ -z "$BIN" ]; then
 fi
 echo "[ut-comaps] Built binary: $BIN"
 
+# 3b) Qt position plugin for lomiri-location-service (GPS on Ubuntu Touch).
+scripts/build-lomiri-position.sh build/lomiri-position/out
+
 # 4) Assemble the click (into clickable's install dir if given).
 export COMAPS_BIN="$BIN"
+export LOMIRI_POSITION_PLUGIN="$ROOT/build/lomiri-position/out/libqtposition_lomiri.so"
 scripts/package.sh "$INSTALL"

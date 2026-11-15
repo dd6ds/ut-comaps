@@ -90,7 +90,8 @@ Die Texte folgen der Sprache (Deutsch/Englisch), die Farben dem hellen/dunklen E
 Die Bedienelemente sind Geschwister des Karten-Widgets (nicht Kinder): die Karte nimmt Touch-Ereignisse
 selbst an und würde sonst alle Berührungen schlucken.
 
-`patches/0007-…` macht Downloads robuster (30-s-Timeout, falls ein Spiegelserver nicht antwortet)
+`patches/0007-…` nimmt auf Ubuntu Touch die Standortquelle „lomiri“ statt geoclue, macht
+Downloads robuster (30-s-Timeout, falls ein Spiegelserver nicht antwortet)
 und übersetzt Ortstypen („Großstadt“ statt „City“) mit den Texten der iPhone-App.
 
 **UI-Tests über adb:** Mit gesetzter Umgebungsvariable `UT_COMAPS_TEST=<datei>` führt die App
@@ -262,7 +263,12 @@ Das baut und packt nach `build/*.click`.
 - **Display:** Solange die App im Vordergrund ist, wird der Bildschirm nicht gedimmt oder gesperrt.
 - **Größe des Clicks:** `data/` wird komplett kopiert. Mit
   `COMAPS_DATA_EXCLUDE="ordner1:ordner2" ./build.sh` lässt du Unnötiges weg.
-- **Icons:** `icons/ut-comaps.svg` ist das App-Icon, `icons/ut-comaps-v1.svg` das frühere.
+- **Standort/GPS:** Ubuntu Touch liefert Positionen nur über lomiri-location-service. Dessen
+  Qt-Plugin (`libqtposition_lomiri`) wird mit `scripts/build-lomiri-position.sh` gegen die gebündelte
+  Qt gebaut (Header aus dem UBports-Repository); beim ersten Standortzugriff fragt Ubuntu Touch nach
+  der Berechtigung. Die Bibliotheken des Dienstes kommen vom Handy.
+- **Icons:** `icons/ut-comaps.svg` ist das CoMaps-Logo aus dem Upstream-Projekt
+  (`docs/badges/logo.svg`); `icons/ut-comaps-v1.svg` und `-v2.svg` sind frühere eigene Entwürfe.
 
 ## Lizenz / Attribution
 
