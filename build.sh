@@ -272,8 +272,17 @@ phone() {
     if [[ -n "$(adb shell 'command -v pkcon' | tr -d '\r')" ]]; then
         adb shell "pkcon install-local --allow-untrusted -y '/home/phablet/Downloads/$name'"
     else
-        echo "build.sh: the phone asks for its password (sudo click install):"
-        adb shell -t "sudo click install --user=phablet --allow-unauthenticated '/home/phablet/Downloads/$name'"
+        # sudo needs the phone's password. "adb shell -t" would let sudo ask,
+        # but UT's adbd then never closes the session, so ask here and pass it
+        # base64-encoded (any characters are safe). UT_PW skips the question.
+        local pw="${UT_PW:-}"
+        if [[ -z "$pw" ]]; then
+            read -r -s -p "Password of the phone (for sudo click install): " pw
+            echo
+        fi
+        local b64
+        b64="$(printf '%s\n' "$pw" | base64 -w0)"
+        adb shell "echo $b64 | base64 -d | sudo -S -p '' click install --user=phablet --allow-unauthenticated '/home/phablet/Downloads/$name' 2>&1 | grep -v 'Signature check failed'" || true
     fi
     adb shell "rm -f '/home/phablet/Downloads/$name'"
 

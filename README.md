@@ -151,8 +151,8 @@ ut-comaps/
 | `./build.sh local-phone` | lokaler Build, danach installieren |
 | `./build.sh <clickable-Argumente>` | beliebiger clickable-Befehl, z. B. `script source`, `clean` |
 
-Auf Images ohne `pkcon` (z. B. UT 26.04) installiert `phone` mit `sudo click install`; das Handy
-fragt dann im Terminal nach seinem Passwort.
+Auf Images ohne `pkcon` (z. B. UT 26.04) installiert `phone` mit `sudo click install` und fragt
+dazu im Terminal nach dem Passwort des Handys (oder nimmt es aus `UT_PW`).
 
 `ci` und `release` laden das Click aus dem Workflow-Artefakt des Laufs. Darf der Workflow kein
 GitHub-Release anlegen (GitHub antwortete zeitweise mit HTTP 403), legt `release` es mit deinem
